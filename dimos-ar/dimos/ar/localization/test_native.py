@@ -72,13 +72,13 @@ async def test_native_map_lifecycle_retries_unaccepted_fix_and_stops_polling() -
     await adapter.close()
 
 
-def test_source_retirement_rejects_even_freshly_republished_old_native_fix() -> None:
+def test_map_reader_ignores_republished_registration_and_accepts_a_change() -> None:
     adapter = NativeMapAdapter("office")
     assert adapter.poll(_buffer(np.eye(4))) is not None
-    adapter.reset()
     assert adapter.poll(_buffer(np.eye(4), ts=200)) is None
-    replacement = NativeMapAdapter("office")
-    assert replacement.poll(_buffer(np.eye(4), ts=200)) is not None
+    changed = np.eye(4)
+    changed[0, 3] = 1.0
+    assert adapter.poll(_buffer(changed, ts=201)) is not None
 
 
 def test_native_map_projects_small_tilt_and_rejects_excessive_tilt() -> None:

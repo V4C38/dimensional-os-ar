@@ -79,17 +79,16 @@ export class SpecsRuntimeCoordinator {
       this.deps.uiPresenter.isAlignmentReviewPending(), false, this.deps.uiPresenter.getOperatingMode());
     const navigationAvailable = view.capabilities?.navigation.available === true;
     const markerControls = isManualControlEnabled(view, setup,
-      this.deps.uiPresenter.isAlignmentReviewPending(), false, "manual") &&
+      false, false, "manual") &&
       view.state?.safety?.stopped !== true;
     const navigationEnabled = markerControls && navigationAvailable;
     this.deps.manipulation.renderer.debugEnabled = this.deps.uiPresenter.getDebugMode();
     this.deps.manipulation.tick(controls && !!origin);
-    if (!navigationAvailable) this.deps.robotPresenter.reset();
     this.deps.navigationController.setInputEnabled(navigationEnabled);
     if (!setup || !navigationAvailable) this.deps.navigationController.hide();
     else this.deps.navigationController.applyView(view, origin);
     this.deps.navigationController.setSelected(this.deps.selection.isSelected());
-    this.deps.navigationInput.tick(navigationEnabled, navigationAvailable && setup && !this.deps.uiPresenter.isAlignmentReviewPending() && view.connection === "ready");
+    this.deps.navigationInput.tick(navigationEnabled, navigationAvailable && setup && view.connection === "ready");
     this.deps.navigationController.surveyFloor();
     this.deps.navigationController.tick(dt);
     const nav = this.deps.navigationController.interaction.snapshot();

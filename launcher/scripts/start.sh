@@ -51,7 +51,7 @@ while [[ $# -gt 0 ]]; do
         echo "--config requires an existing native DimOS config file" >&2
         exit 1
       fi
-      CONFIG_FLAG="$2"
+      CONFIG_FLAG="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"
       shift 2
       ;;
     --robot-ip)
@@ -102,11 +102,24 @@ ensure_system_config() {
   [[ -n "${DIMOS_AR_SKIP_SYSCONFIG:-}" ]] && return 0
 
   local helper="${SCRIPT_DIR}/configure-system.sh"
-  local state_dir="${HOME}/.local/state/dimos"
+  local state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/dimos"
+  local transport check
   [[ -x "${helper}" ]] || return 0
 
-  if "${helper}" --check --state-dir "${state_dir}" 2>/dev/null; then
+  if ! transport="$(cd "${ROOT}/launcher" && "${PYTHON}" "${SCRIPT_DIR}/transport_check.py" "${CONFIG_FLAG}")"; then
+    echo "DimOS transport check failed." >&2
+    exit 1
+  fi
+  [[ "${transport}" == '"lcm"' ]] || return 0
+
+  if "${helper}" --check --state-dir "${state_dir}"; then
     return 0
+  else
+    check=$?
+  fi
+  if [[ "${check}" -ne 10 ]]; then
+    echo "macOS networking check failed (${check})." >&2
+    exit 1
   fi
 
   echo "Configuring macOS network settings for DimOS (requires your admin password)…" >&2
@@ -209,17 +222,20 @@ arrow_menu() {
 
 # Resolve the robot's IP via the official Unitree multicast discovery (the same
 # mechanism the Unitree app/SDK use). Auto-selects when exactly one robot is
-# present, shows a selector when several are (interactive only), and falls back
-# to offline replay when none are found. Sets ROBOT_IP.
+# present and shows a selector when several are (interactive only). Sets ROBOT_IP.
 resolve_robot_ip() {
   local discovered=()
   local labels=()
-  local line sn ip count
+  local line sn ip count output
 
   echo "Discovering robots on the network..." >&2
+  if ! output="$("${PYTHON}" "${SCRIPT_DIR}/robot_discovery.py" unitree_go2 --format tsv)"; then
+    echo "Robot discovery failed." >&2
+    exit 1
+  fi
   while IFS= read -r line; do
     [[ -n "${line}" ]] && discovered+=("${line}")
-  done < <("${PYTHON}" "${SCRIPT_DIR}/robot_discovery.py" unitree_go2 --format tsv 2>/dev/null)
+  done <<< "${output}"
 
   count=${#discovered[@]}
 
@@ -247,10 +263,10 @@ resolve_robot_ip() {
     return 0
   fi
 
-  print_color 2 31 "No robots found on the network — using offline replay (ROBOT_IP=simulated)."
+  print_color 2 31 "No robots found on the network."
   echo "Set ROBOT_IP=<ip> and re-run to target a specific robot." >&2
   echo "Tip: --robot-ip simulated (or ROBOT_IP=simulated) skips discovery and starts faster." >&2
-  ROBOT_IP="simulated"
+  exit 1
 }
 
 if [[ -n "${BLUEPRINT_FLAG}" ]]; then
@@ -274,6 +290,10 @@ STACK_LABEL="${MENU_LABELS[$SELECTED_INDEX]}"
 MANIPULATION="${STACK_MANIPULATION[$SELECTED_INDEX]}"
 
 if [[ "${MANIPULATION}" == "1" ]]; then
+  if [[ -n "${CAN_PORT:-}" ]]; then
+    export OPENYAMCONNECTION__CAN_PORT="${OPENYAMCONNECTION__CAN_PORT:-${CAN_PORT}}"
+    unset CAN_PORT
+  fi
   unset ROBOT_IP
 elif [[ -z "${OPENAI_API_KEY:-}" ]]; then
   echo "Warning: OPENAI_API_KEY is unset — agent mode will not work until it is set." >&2
@@ -349,7 +369,14 @@ echo ""
 
 # Native dotenv loading uses the current launcher credential file.
 cd "${ROOT}/launcher"
+if [[ "${DIMOS_AR_LAUNCHER_KEEP_AWAKE:-}" == "1" && "$(uname -s)" != Darwin ]]; then
+  echo "Idle sleep inhibition unavailable on this host" >&2
+fi
 if [[ "${MANIPULATION}" == "1" && -z "${REPLAY_DB:-}" ]]; then
   exec "${PYTHON}" "${SCRIPT_DIR}/supervise-arm.py" -- "${RUN_CMD[@]}" < /dev/null
+fi
+if [[ "${DIMOS_AR_LAUNCHER_KEEP_AWAKE:-}" == "1" && "$(uname -s)" == Darwin ]]; then
+  # The executable below inherits this PID. Only idle system sleep is inhibited.
+  /usr/bin/caffeinate -i -w "$$" </dev/null >/dev/null 2>&1 &
 fi
 exec "${RUN_CMD[@]}" < /dev/null 2> >(grep -v '^objc\[' >&2)

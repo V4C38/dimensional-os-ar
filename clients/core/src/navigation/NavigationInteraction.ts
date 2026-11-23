@@ -498,7 +498,9 @@ export class NavigationInteraction {
         this.heading.reset(this.direct.pose?.position ?? baseline.position, this.direct.pose?.orientation ?? baseline.orientation, _now);
       }
     }
-    this.origin = available ? origin : null; this.floor = floor; this.armed = available;
+    const motionReady = view.state?.robot_link?.motion_ready !== false;
+    if (!motionReady) this.cancelDrag();
+    this.origin = available ? origin : null; this.floor = floor; this.armed = available && motionReady;
     if (!available) this.selected = false;
     const shared = this.collaboration.snapshot();
     if ((shared.blocked && !shared.takeoverPending) || this.lastDenial !== this.collaboration.denialRevision) {

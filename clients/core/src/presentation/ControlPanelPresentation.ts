@@ -151,6 +151,34 @@ export const NO_ROBOT_CONNECTED_LABEL = "- Disconnected -";
 
 export type SessionLinkPhase = "disconnected" | "connecting" | "robotOffline" | "connected";
 
+export function robotConnectionLabel(phase: SessionLinkPhase): string {
+  switch (phase) {
+    case "disconnected": return "dimOS disconnected";
+    case "connecting": return "Connecting…";
+    case "robotOffline": return "Robot disconnected.";
+    case "connected": return "Connected";
+  }
+}
+
+/** A robot can go offline while the headset's control socket stays connected. */
+export class Go2RecoveryReview {
+  private connected = false;
+  private interrupted = false;
+
+  observe(view: ARModuleSessionState): boolean {
+    const link = view.state?.robot_link;
+    if (view.connection !== "ready" || link?.status === "offline") {
+      if (this.connected) this.interrupted = true;
+      return false;
+    }
+    if (link?.status !== "online") return false;
+    const recovered = this.interrupted;
+    this.connected = true;
+    this.interrupted = false;
+    return recovered;
+  }
+}
+
 export type StatusTone = "error" | "warn" | "success" | "neutral" | "muted";
 
 export interface StatusText {
@@ -186,7 +214,7 @@ export function sessionLinkStatus(
   switch (deriveSessionLinkPhase(view)) {
     case "disconnected":
       return {
-        text: `\n\n\n${NO_ROBOT_CONNECTED_LABEL}`,
+        text: `\n\n\n${robotConnectionLabel("disconnected")}`,
         color: "error",
       };
     case "connecting":
@@ -196,7 +224,7 @@ export function sessionLinkStatus(
       };
     case "robotOffline":
       return {
-        text: "\n\n\nConnected - Robot not connected",
+        text: `\n\n\n${robotConnectionLabel("robotOffline")}`,
         color: "warn",
       };
     case "connected":
@@ -216,18 +244,18 @@ export function sessionLinkTransitionLog(
   }
   if (next === "disconnected") {
     return {
-      hudText: "Disconnected",
+      hudText: robotConnectionLabel(next),
       hudColor: "error",
-      consoleText: "Disconnected",
+      consoleText: robotConnectionLabel(next),
       consoleColor: "error",
       hudDurationS: 3.0,
     };
   }
-  if (prev === "connected" && next === "robotOffline") {
+  if (next === "robotOffline") {
     return {
-      hudText: "Robot disconnected",
+      hudText: robotConnectionLabel(next),
       hudColor: "error",
-      consoleText: "Robot disconnected",
+      consoleText: robotConnectionLabel(next),
       consoleColor: "error",
       hudDurationS: 3.0,
     };
@@ -320,7 +348,7 @@ export function isSelectionEligible(
 }
 
 export function isAgentEnabled(view: ARModuleSessionState, setupCompleted: boolean, mode: OperatingMode): boolean {
-  return setupCompleted && mode === "agent" && view.connection === "ready" && view.capabilities?.agent.available === true;
+  return setupCompleted && mode === "agent" && view.connection === "ready" && view.capabilities?.agent.available === true && view.state?.robot_link?.motion_ready !== false;
 }
 
 export function isManualControlEnabled(
@@ -331,5 +359,5 @@ export function isManualControlEnabled(
   mode: OperatingMode = operatingMode(view),
 ): boolean {
   return setupCompleted && !alignmentReviewPending && !setupCelebrating &&
-    mode === "manual" && view.connection === "ready";
+    mode === "manual" && view.connection === "ready" && view.state?.robot_link?.motion_ready !== false;
 }

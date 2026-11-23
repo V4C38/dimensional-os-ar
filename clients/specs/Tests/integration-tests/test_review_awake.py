@@ -26,6 +26,7 @@ class ReviewAwakeTests(unittest.TestCase):
             return 0
 
         with patch.object(review, "arguments", return_value=review.ReviewOptions(prepare_only=False)), \
+                patch.object(review.subprocess, "check_output", return_value="1\n"), \
                 patch.object(review, "KeepAwake", Guard), \
                 patch.object(review, "_run", side_effect=coordinate):
             self.assertEqual(review.main(), 0)
@@ -33,6 +34,7 @@ class ReviewAwakeTests(unittest.TestCase):
 
     def test_guard_releases_when_coordinator_raises(self):
         with patch.object(review, "arguments", return_value=review.ReviewOptions(prepare_only=False)), \
+                patch.object(review.subprocess, "check_output", return_value="1\n"), \
                 patch.object(review, "KeepAwake") as guard, \
                 patch.object(review, "_run", side_effect=RuntimeError("handoff failed")):
             guard.return_value.__exit__.return_value = False

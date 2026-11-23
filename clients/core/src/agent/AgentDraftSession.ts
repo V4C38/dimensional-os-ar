@@ -1,10 +1,6 @@
 import type { ARModuleSessionState } from "../websocket/ARModuleSession";
 import { isAgentEnabled, type OperatingMode } from "../presentation/ControlPanelPresentation";
 
-export function matchesStopCommand(text: string): boolean {
-  return /\bstop\b/i.test(text);
-}
-
 export type AgentResponseSeverity = "ok" | "warn" | "error";
 
 const ERROR_SUBSTRINGS: readonly string[] = [
@@ -78,7 +74,6 @@ export class AgentDraftSession {
     recognition: RecognitionPort | null;
     synthesis: SynthesisPort | null;
     send: (text: string) => void;
-    estop: () => void;
     isSelected: () => boolean;
     select: () => void;
   }) {
@@ -162,7 +157,6 @@ export class AgentDraftSession {
   submitTyped(text: string): boolean {
     if (!this.enabled || !this.deps.isSelected() || this.holding || this.flushing || !text.trim()) return false;
     try {
-      if (matchesStopCommand(text)) this.deps.estop();
       this.deps.send(text.trim());
       this.setDraft("");
       this.snapshotValue.error = null;

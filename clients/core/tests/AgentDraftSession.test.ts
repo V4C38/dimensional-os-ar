@@ -15,7 +15,7 @@ function fixture(supported = true, graceful = false) {
   if (graceful) recognition.finish = vi.fn();
   const synthesis = { speak: vi.fn((_text: string, onEnd: () => void) => { endSpeech = onEnd; }), stop: vi.fn() };
   const send = vi.fn(), estop = vi.fn();
-  const speech = new AgentDraftSession({ recognition: supported ? recognition : null, synthesis, send, estop,
+  const speech = new AgentDraftSession({ recognition: supported ? recognition : null, synthesis, send,
     isSelected: () => selected, select });
   speech.tick(1, true, null, true);
   return { speech, recognition, synthesis, send, estop, select,
@@ -149,7 +149,7 @@ it("ignores completion from a replaced utterance and retires synthesis on stop",
   const completions: Array<() => void> = [];
   const speech = new AgentDraftSession({ recognition: null,
     synthesis: { speak: (_text, done) => { completions.push(done); }, stop: () => {} },
-    send: () => {}, estop: () => {}, isSelected: () => true, select: () => {} });
+    send: () => {}, isSelected: () => true, select: () => {} });
   speech.tick(1, true, "A", true, 1);
   speech.tick(2, true, "B", true, 2);
   completions[0]();
@@ -160,9 +160,10 @@ it("ignores completion from a replaced utterance and retires synthesis on stop",
   expect(speech.snapshot().status).toBe("Off");
 });
 
-it("issues emergency stop only when an explicit submitted draft contains stop", () => {
+it("passes submitted stop text through as an agent prompt", () => {
   const f = fixture(); f.setSelected(true); f.speech.setDraft("please stop");
   expect(f.estop).not.toHaveBeenCalled();
   expect(f.speech.submitTyped("please stop")).toBe(true);
-  expect(f.estop).toHaveBeenCalledOnce();
+  expect(f.send).toHaveBeenCalledWith("please stop");
+  expect(f.estop).not.toHaveBeenCalled();
 });

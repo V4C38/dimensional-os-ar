@@ -15,14 +15,14 @@ BITRATE = 1_000_000
 TX_QUEUE_LENGTH = 1_000
 
 
-def unavailable(state: str, message: str) -> dict[str, Any]:
-    return {"interface": INTERFACE, "ready": False, "state": state, "message": message}
+def unavailable(state: str, message: str, interface: str = INTERFACE) -> dict[str, Any]:
+    return {"interface": interface, "ready": False, "state": state, "message": message}
 
 
 def inspect_link(links: list[dict[str, Any]], interface: str = INTERFACE) -> dict[str, Any]:
     link = next((item for item in links if item.get("ifname") == interface), None)
     if link is None:
-        return {**unavailable("missing", f"Connect the CAN adapter; {interface} was not found."), "interface": interface}
+        return unavailable("missing", f"Connect the CAN adapter; {interface} was not found.", interface)
     info = link.get("linkinfo", {})
     data = info.get("info_data", {})
     bitrate = data.get("bittiming", {}).get("bitrate")
@@ -68,15 +68,10 @@ def inspect_link(links: list[dict[str, Any]], interface: str = INTERFACE) -> dic
 
 async def check_can(interface: str = INTERFACE) -> dict[str, Any]:
     if sys.platform != "linux":
-        return {
-            **unavailable(
-                "not_required", "SocketCAN setup is not required on this platform."
-            ),
-            "ready": True,
-        }
+        return unavailable("error", "Live OpenYAM requires Linux with a configured SocketCAN interface.", interface)
     executable = shutil.which("ip")
     if executable is None:
-        return unavailable("error", "Install iproute2 to check and configure CAN.")
+        return unavailable("error", "Install iproute2 to check and configure CAN.", interface)
     proc = None
     try:
         proc = await asyncio.create_subprocess_exec(
@@ -96,13 +91,14 @@ async def check_can(interface: str = INTERFACE) -> dict[str, Any]:
                 "error",
                 err.decode(errors="replace").strip()
                 or "Cannot inspect CAN interfaces.",
+                interface,
             )
         links = json.loads(out)
         if not isinstance(links, list):
             raise TypeError("Expected an interface list")
         return inspect_link(links, interface)
     except (OSError, TimeoutError, ValueError, TypeError, AttributeError) as exc:
-        return unavailable("error", f"Cannot inspect CAN: {exc}")
+        return unavailable("error", f"Cannot inspect CAN: {exc}", interface)
     finally:
         if proc is not None and proc.returncode is None:
             proc.kill()

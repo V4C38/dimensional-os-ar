@@ -1,7 +1,8 @@
 """CAN inspection and setup use fake commands; never reconfigure a live interface."""
 
+import asyncio
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -100,9 +101,11 @@ def test_setup_uses_native_elevation_and_selected_interpreter(tmp_path, monkeypa
 
 
 @pytest.mark.asyncio
-async def test_non_linux_is_not_required(monkeypatch):
+async def test_live_can_requires_socketcan_platform(monkeypatch):
     monkeypatch.setattr(can_setup.sys, "platform", "darwin")
-    assert (await can_setup.check_can())["state"] == "not_required"
+    status = await can_setup.check_can()
+    assert status["state"] == "error"
+    assert not status["ready"]
 
 
 @pytest.mark.asyncio
@@ -167,13 +170,13 @@ async def test_real_start_requires_can_before_any_cleanup_and_mock_bypasses_it(
     clear = AsyncMock()
     monkeypatch.setattr(manager, "_clear_before_start", clear)
     with pytest.raises(ValueError, match="can0 is down"):
-        await manager.start_armodule(blueprint="openyam_ar_planner", client="webxr")
+        await manager.start_armodule(blueprint="openyam_ar_planner")
     clear.assert_not_awaited()
     can.reset_mock()
     monkeypatch.setattr(manager, "_configure_system_if_needed", AsyncMock())
     monkeypatch.setattr(manager.runtime, "_spawn", AsyncMock())
     await manager.start_armodule(
-        blueprint="openyam_ar_planner", client="specs", simulation=True
+        blueprint="openyam_ar_planner", simulation=True
     )
     can.assert_not_awaited()
     clear.assert_awaited_once()
@@ -182,7 +185,7 @@ async def test_real_start_requires_can_before_any_cleanup_and_mock_bypasses_it(
 @pytest.mark.asyncio
 async def test_can_setup_cannot_overlap_itself(tmp_path, monkeypatch):
     manager = ProcessManager(root=tmp_path)
-    manager.dependencies.can_setup_running = True
+    manager.dependencies.can_operation.process = AsyncMock(returncode=None)
     spawn = AsyncMock()
     monkeypatch.setattr("armodule.asyncio.create_subprocess_exec", spawn)
     with pytest.raises(RuntimeError, match="already running"):
@@ -210,20 +213,44 @@ async def test_setup_verifies_interface_after_official_command(tmp_path, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_can_api_exposes_status_and_running_conflict(monkeypatch):
+async def test_can_api_exposes_status_and_running_conflict(app_context, monkeypatch):
     from fastapi import HTTPException
 
     import app
 
     monkeypatch.setattr(
-        app.manager.dependencies, "can_status", AsyncMock(return_value={"ready": True})
+        app_context.manager.dependencies, "can_status", AsyncMock(return_value={"ready": True})
     )
-    assert (await app.api_can_status())["ready"]
+    assert (await app.api_can_status(context=app_context))["ready"]
     monkeypatch.setattr(
-        app.manager,
+        app_context.manager,
         "setup_can",
         AsyncMock(side_effect=RuntimeError("DimOS is running")),
     )
     with pytest.raises(HTTPException) as exc:
-        await app.api_can_setup()
+        await app.api_can_setup(context=app_context)
     assert exc.value.status_code == 409
+
+
+async def test_stop_reaps_can_setup_while_the_prompt_is_pending(tmp_path, monkeypatch):
+    manager = ProcessManager(root=tmp_path)
+    manager.dependencies.update_status(dimos_python="/selected/python")
+    monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[]))
+    monkeypatch.setattr(manager.dependencies, "can_status", AsyncMock(return_value={"ready": False}))
+    monkeypatch.setattr("armodule.setup_command", lambda _: ["official-can-command"])
+    entered = asyncio.Event()
+
+    async def pending_prompt():
+        entered.set()
+        await asyncio.Future()
+
+    proc = AsyncMock(returncode=None, communicate=AsyncMock(side_effect=pending_prompt))
+    proc.kill = Mock(side_effect=lambda: setattr(proc, "returncode", -9))
+    monkeypatch.setattr("armodule.asyncio.create_subprocess_exec", AsyncMock(return_value=proc))
+    setup = asyncio.create_task(manager.setup_can())
+    await asyncio.wait_for(entered.wait(), timeout=1)
+    await asyncio.wait_for(manager.stop_armodule(), timeout=1)
+    with pytest.raises(asyncio.CancelledError):
+        await setup
+    proc.kill.assert_called_once()
+    assert not manager.can_setup_running

@@ -75,6 +75,7 @@ it("consumes UI selection, cancels drags on input loss, invalidates resets, and 
   const client = new DimOSWebXRClient({ camera: camera.source, clock: { now: () => 10 }, transport: new BrowserWebSocketTransport({ url: "wss://test/ar", socketFactory: () => { throw new Error("offline test"); } }) });
   const tick = vi.spyOn(client, "tick").mockImplementation(() => {});
   vi.spyOn(client, "controlsEnabled").mockReturnValue(true);
+  vi.spyOn(client, "navigationControlsEnabled").mockReturnValue(true);
   // This input-routing fixture has no ARModule handshake. Supply marker
   // eligibility alongside ordinary controls; real session admission is covered
   // by WebXRSession and the Agent takeover input regression.

@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import atexit
-import os
 import sys
-import tempfile
 from collections.abc import AsyncIterator
 from pathlib import Path
 from unittest.mock import AsyncMock
@@ -14,24 +11,10 @@ import pytest
 import pytest_asyncio
 
 ROOT = Path(__file__).resolve().parents[1]
-# App globals are constructed during test collection, before autouse fixtures.
-_collection_config = tempfile.TemporaryDirectory(prefix="dimos-launcher-tests-")
-_prior_config_home = os.environ.get("XDG_CONFIG_HOME")
-os.environ["XDG_CONFIG_HOME"] = _collection_config.name
-
-
-def _cleanup_collection_config() -> None:
-    if _prior_config_home is None:
-        os.environ.pop("XDG_CONFIG_HOME", None)
-    else:
-        os.environ["XDG_CONFIG_HOME"] = _prior_config_home
-    _collection_config.cleanup()
-
-
-atexit.register(_cleanup_collection_config)
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from app import LauncherContext
 from armodule import ProcessManager
 from tests.processes import Child
 
@@ -39,14 +22,22 @@ from tests.processes import Child
 @pytest.fixture(autouse=True)
 def isolate_dimos_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg-config"))
-    import app
     import config
+
+    # Keep native configuration and repository settings isolated in tests.
+    monkeypatch.setattr(config, "repo_root", lambda: tmp_path)
+
+
+
+@pytest.fixture
+def app_context(tmp_path: Path) -> LauncherContext:
     from robot_profiles import RobotProfiles
 
-    # Isolate globals already imported by collection, and the repository .env too.
-    monkeypatch.setattr(config, "repo_root", lambda: tmp_path)
-    monkeypatch.setattr(app, "manager", ProcessManager(root=tmp_path))
-    monkeypatch.setattr(app, "robot_profiles", RobotProfiles())
+    return LauncherContext(
+        manager=ProcessManager(root=tmp_path),
+        robot_profiles=RobotProfiles(tmp_path / "xdg-config/dimos/ar-profiles.json"),
+    )
+
 
 
 @pytest.fixture(autouse=True)
@@ -92,7 +83,10 @@ async def runtime(
     monkeypatch.setattr(mgr, "_build_webxr", AsyncMock())
     monkeypatch.setattr(mgr, "planner_status", AsyncMock(return_value={"ready": True}))
     monkeypatch.setattr(mgr, "can_status", AsyncMock(return_value={"ready": True}))
-    monkeypatch.setattr(mgr.runtime, "_stop_one", stop)
+    async def stop_process_group(proc: Child | None, label: str, grace: float) -> bool:
+        return await stop(proc, label)
+
+    monkeypatch.setattr(mgr.process_groups, "stop", stop_process_group)
     try:
         yield mgr, children, spawn
     finally:

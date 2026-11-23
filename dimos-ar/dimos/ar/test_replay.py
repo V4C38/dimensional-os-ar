@@ -21,10 +21,23 @@ def sample():
     return JointState(name=list(model.joint_names), position=list(model.home_joints))
 
 
-def test_arm_recording_validates_payload_not_stream_name(tmp_path):
+@pytest.mark.parametrize("robot", [None, "arm"], ids=["legacy-joints", "qualified-joints"])
+def test_arm_recording_validates_payload_not_stream_name(tmp_path, robot):
     path = tmp_path / "arm.db"
-    record(path, {"anything": [sample(), sample()]})
+    model = make_openyam_model_config(robot=robot)
+    measured = JointState(name=list(model.joint_names), position=list(model.home_joints))
+    record(path, {"anything": [measured, measured]})
     assert inspect_recording(str(path), "openyam")["streams"] == {"joints": "anything"}
+
+
+def test_arm_recording_rejects_ambiguous_joint_aliases(tmp_path):
+    path = tmp_path / "arm.db"
+    measured = sample()
+    measured.name.append("arm/" + measured.name[0])
+    measured.position.append(0.0)
+    record(path, {"joints": [measured]})
+    with pytest.raises(ValueError, match="Every arm sample"):
+        inspect_recording(str(path), "openyam")
 
 
 def test_arm_recording_rejects_later_incomplete_sample(tmp_path):

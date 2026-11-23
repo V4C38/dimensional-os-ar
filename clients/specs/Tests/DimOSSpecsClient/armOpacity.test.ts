@@ -118,8 +118,8 @@ it("keeps all initialized link buffers static during reveal, motion, warnings an
     observations: { arm: { joints: ARM_FIXTURE.joints, gripper: 0 } } };
   const origin: any = { ...identity, alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
   for (let frame = 1; frame < 360; frame++) {
-    interaction.previewJoints = frame > 60 && frame < 180 ? { ...ARM_FIXTURE.joints, yam_joint2: 1.3 } : null;
-    interaction.rejection = frame > 180 && frame < 240 ? { failedJoints: ["yam_joint2"] } : null;
+    interaction.previewJoints = frame > 60 && frame < 180 ? { ...ARM_FIXTURE.joints, "arm/yam_joint2": 1.3 } : null;
+    interaction.rejection = frame > 180 && frame < 240 ? { failedJoints: ["arm/yam_joint2"] } : null;
     (renderer as any).hoverSources = new Set(frame > 240 ? ["hand"] : []);
     renderer.apply({ state, origin, selected: frame <= 240, enabled: true, now: frame / 60, camera: node(), title: "OpenYAM" });
   }

@@ -11,9 +11,9 @@ from uuid import uuid4
 from dimos_lcm.std_msgs import Bool
 from reactivex.disposable import Disposable
 
+from dimos.agents.agent import Agent
 from dimos.agents.annotation import skill
 from dimos.agents.capabilities import CAP_MOVEMENT
-from dimos.agents.mcp.mcp_client import McpClient
 from dimos.agents.skills.person_follow import PersonFollowSkillContainer
 from dimos.ar.robot.agent_control import (
     AgentTurnGate,
@@ -87,7 +87,7 @@ class _FollowingVelocityOutput(Out[Twist]):  # type: ignore[misc]
             return True
 
 
-class ARGuardedMcpClient(McpClient):  # type: ignore[misc]
+class ARGuardedAgent(Agent):  # type: ignore[misc]
     _navigation: ARAgentNavigationSpec
     _following: ARFollowingQuiescenceSpec
 
@@ -184,7 +184,7 @@ class ARGuardedMcpClient(McpClient):  # type: ignore[misc]
             generation = int(token.split(":", 2)[1])
         except (ValueError, IndexError):
             return
-        self._ar_gate.publish(generation, lambda: super(ARGuardedMcpClient, self)
+        self._ar_gate.publish(generation, lambda: super(ARGuardedAgent, self)
                               ._on_tool_stream_message(message))
 
     @rpc  # type: ignore[untyped-decorator]
@@ -195,7 +195,7 @@ class ARGuardedMcpClient(McpClient):  # type: ignore[misc]
         if type(generation) is not int or not self._ar_gate.accepts(generation):
             return
         try:
-            self._ar_gate.run_effect(generation, lambda: super(ARGuardedMcpClient, self)
+            self._ar_gate.run_effect(generation, lambda: super(ARGuardedAgent, self)
                                     .dispatch_continuation(continuation, continuation_context))
         except RuntimeError:
             logger.debug("Retired agent continuation discarded")
@@ -228,17 +228,19 @@ class ARGuardedMcpClient(McpClient):  # type: ignore[misc]
                 graph = self._state_graph
 
                 def stream(*args: Any, **kwargs: Any) -> Any:
-                    for update in graph.stream(*args, **kwargs):
-                        if not self._ar_gate.accepts(generation):
-                            return
-                        yield update
+                    try:
+                        for update in graph.stream(*args, **kwargs):
+                            if not self._ar_gate.accepts(generation):
+                                return
+                            yield update
+                    except Exception:
+                        # Agent records failures as chat messages. A retired turn
+                        # must finish silently even when its pending tool fails.
+                        if self._ar_gate.accepts(generation):
+                            raise
 
                 try:
                     self._process_message(SimpleNamespace(stream=stream), message)
-                except Exception:
-                    if self._ar_gate.accepts(generation):
-                        raise
-                    logger.debug("Retired native agent turn discarded")
                 finally:
                     # The turn lock also protects cleanup. Resume cannot
                     # enqueue a fresh command before old continuations drain.

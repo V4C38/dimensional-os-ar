@@ -47,11 +47,11 @@ from dimos.ar.robot.agent_service import ARAgentService
 from dimos.ar.robot.capabilities import (
     NAV_GOAL,
     NAV_JOYSTICK,
-    Capability,
     CapabilityName,
     CapabilitySet,
 )
 from dimos.ar.robot.emergency_stop import EmergencyStopController
+from dimos.ar.robot.live_clock import live_time
 from dimos.ar.robot.odometry import RobotOdometry, RobotSourceChangedError
 from dimos.ar.robot.profiles.profile import (
     FiducialMarkerMount,
@@ -62,6 +62,7 @@ from dimos.ar.robot.profiles.profile import (
 from dimos.ar.robot.state_publisher import RobotStatePublisher
 from dimos.ar.sensors.lidar_settings import DEFAULT_LIDAR_SETTINGS, LidarSettings
 from dimos.ar.spatial import FrameSnapshot, transform_pose
+from dimos.ar.websocket.launcher_connections import LauncherConnections
 from dimos.ar.websocket.protocol import (
     AgentState,
     ClientPose,
@@ -73,6 +74,7 @@ from dimos.ar.websocket.protocol import (
     LocalizationStartRequest,
     LocalizationTracking,
     ResumeOperationRequest,
+    RobotLink,
     StateRequest,
     StateSnapshot,
     TimeSync,
@@ -89,6 +91,7 @@ from dimos.core.core import rpc
 from dimos.core.global_config import global_config
 from dimos.core.module import Module, ModuleConfig
 from dimos.core.stream import In, Out
+from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
@@ -97,6 +100,7 @@ from dimos.msgs.sensor_msgs.CameraInfo import CameraInfo
 from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.tf2_msgs.TFMessage import TFMessage
+from dimos.robot.unitree.config import connection_type
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -201,6 +205,7 @@ class ARModule(Module):  # type: ignore[misc]
 
     lidar: In[PointCloud2]
     odom: In[PoseStamped]
+    go2_peer_online: In[Bool]
     global_costmap: In[OccupancyGrid]
     tf: In[TFMessage]
     path: In[Path]
@@ -265,16 +270,29 @@ class ARModule(Module):  # type: ignore[misc]
             self._pairing_rejected = 0
             self._pairing_accepted = 0
             self._navigation_projection_task: asyncio.Task[None] | None = None
+            unitree_mode = connection_type(
+                replay=self.config.g.replay, simulation=self.config.g.simulation
+            ).lower()
             self._replay_mode = (
                 self._recording_source
-                or bool(getattr(global_config, "replay", False))
-                or getattr(global_config, "unitree_connection_type", None) == "replay"
-                or global_config.robot_ip in ("fake", "mock", "replay")
+                or unitree_mode == "replay"
+                or self.config.g.robot_ip in ("fake", "mock", "replay")
             )
             self._odometry = RobotOdometry(
                 recording=self._replay_mode
             )
-            self._requires_mapping_restart = False
+            self._monitor_live_go2 = (
+                self.config.robot == RobotName.UNITREE_GO2
+                and not self._replay_mode
+                and unitree_mode == "webrtc"
+                and self.config.g.robot_ip != "mujoco"
+                and self.config.stationary_base is None
+            )
+            self._live_odom_at: float | None = None
+            self._go2_peer_online: bool | None = None
+            self._link_generation = 0
+            self._link_offline = False
+            self._link_task: asyncio.Task[None] | None = None
             self._ws_server = WebSocketServer(
                 port=self.config.port,
                 relay_url=self.config.ip_relay_url,
@@ -305,6 +323,7 @@ class ARModule(Module):  # type: ignore[misc]
                     self._ws_server.schedule_broadcast_text,
                     on_ready=lambda: logger.info("Manipulation runtime ready"),
                     on_snapshot=self._on_manipulation_snapshot,
+                    on_feedback=self._on_launcher_feedback,
                     on_result=self._on_manipulation_result,
                     frames=lambda: self._localization.frames,
                     control_state=lambda: (
@@ -313,6 +332,13 @@ class ARModule(Module):  # type: ignore[misc]
                     ),
                     prepare_outbound=self._ws_server.prepare_outbound_async,
                 )
+            self._launcher_connections = LauncherConnections()
+            self._launcher_robot_name = self._profile.description.display_name
+            if self._recording_source:
+                self._launcher_robot_name += " (Recording)"
+            elif unitree_mode != "webrtc" or self.config.g.robot_ip in ("fake", "mock", "mujoco"):
+                self._launcher_robot_name += " (Simulated)"
+            self._launcher_feedback: bool | None = None
             self._nav_goal_coordinator = NavGoalCoordinator(
                 frames=lambda: self._localization.frames,
             )
@@ -393,7 +419,6 @@ class ARModule(Module):  # type: ignore[misc]
         return InteractionController(
             InteractionPorts(
                 capabilities=lambda: self._capabilities,
-                mapping_restart_required=lambda: getattr(self, "_requires_mapping_restart", False),
                 manipulation=lambda: self._manipulation_service,
                 agent_control=lambda: self._agent_control,
                 agent_idle=lambda: self._agent_service.idle,
@@ -402,7 +427,7 @@ class ARModule(Module):  # type: ignore[misc]
                 submit_goal=self._submit_navigation_goal,
                 cancel_joystick=self._cancel_tele_cmd_vel,
                 stop_navigation=lambda: self._safety.controlled_stop(),
-                operation_stopped=lambda: self._safety.stopped,
+                operation_stopped=lambda: self._safety.stopped or not self._live_motion_ready(),
                 retire_navigation=lambda: self._nav_goal_coordinator.on_estop(),
                 broadcast_state=self._broadcast_state,
                 send=lambda client, text: self._ws_server.schedule_send_to_client(client, text),
@@ -426,12 +451,14 @@ class ARModule(Module):  # type: ignore[misc]
                     raise ValueError(
                         "fiducial_marker provider requires fiducial dictionary and mounts"
                     )
+                stationary = self.config.stationary_base
                 marker = FiducialMarkerLocalizer(
                     pose_buffer=self._odometry.history,
                     marker_mounts=self._profile.fiducial_marker_mounts,
                     dictionary_name=self._profile.fiducial_dictionary,
-                    allow_latest_robot_pose=self._replay_mode
-                    or self.config.stationary_base is not None,
+                    allow_latest_robot_pose=self._replay_mode,
+                    fixed_base=Pose(stationary.position, stationary.orientation)
+                    if stationary is not None else None,
                 )
             elif provider.type == "vps" and vps is None:
                 if not provider.map_code:
@@ -468,6 +495,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._loop.call_soon_threadsafe(self._start_stationary_base)
         try:
             self._ws_server.start()
+            self._loop.call_soon_threadsafe(self._publish_launcher_connections)
         except Exception:
             try:
                 self.stop()
@@ -484,6 +512,9 @@ class ARModule(Module):  # type: ignore[misc]
         self._ar_stopping = True
         logger.info("ARModule stopping")
         self._cancel_tele_cmd_vel()
+        link_task = getattr(self, "_link_task", None)
+        if link_task is not None:
+            self._loop.call_soon_threadsafe(link_task.cancel)
         projection = getattr(self, "_navigation_projection_task", None)
         if projection is not None:
             self._loop.call_soon_threadsafe(projection.cancel)
@@ -536,7 +567,7 @@ class ARModule(Module):  # type: ignore[misc]
             self._native_map.start(self.tfbuffer, self._accept_native_map)
 
     def _accept_native_map(self, sample: NativeMapSample) -> bool:
-        if self._odometry.latest() is None or self._requires_mapping_restart:
+        if self._odometry.latest() is None:
             return False
         self._localization.on_native_reference(
             sample.T_native_odom,
@@ -570,20 +601,11 @@ class ARModule(Module):  # type: ignore[misc]
         self._loop.call_soon(self._broadcast_interaction)
 
     def _hello_body(self, _client_id: str) -> HelloBody:
-        capabilities = self._capabilities.as_mapping()
-        navigation_inputs = self._capabilities.navigation_as_mapping()
-        if getattr(self, "_requires_mapping_restart", False):
-            unavailable = Capability(False, "robot odometry reset; restart DimOS mapping")
-            capabilities[CapabilityName.NAVIGATION] = unavailable
-            navigation_inputs = dict.fromkeys(navigation_inputs, unavailable)
         return HelloBody(
             robot=self._profile.description,
-            capabilities=capabilities,
-            navigation_inputs=navigation_inputs,
-            nav_goal_preview=(
-                self._capabilities.supports_navigation(NAV_GOAL)
-                and not getattr(self, "_requires_mapping_restart", False)
-            ),
+            capabilities=self._capabilities.as_mapping(),
+            navigation_inputs=self._capabilities.navigation_as_mapping(),
+            nav_goal_preview=self._capabilities.supports_navigation(NAV_GOAL),
             server_info=server_info(),
             odom_reference_id=self._odometry.reference_id,
             localization={"providers": [LocalizationProviderType(p.type) for p in self.config.localization.providers]},
@@ -596,6 +618,8 @@ class ARModule(Module):  # type: ignore[misc]
             idle = self._agent_service.idle
         safety = self._safety.snapshot()
         if (
+            not self._live_motion_ready()
+            or
             self._interaction_controller.mode_task is not None
             or self._interaction_controller.native_mode_uncertain
             or (
@@ -614,9 +638,33 @@ class ARModule(Module):  # type: ignore[misc]
             agent=AgentState(idle=idle),
             nav_preview_costmap_ts=self._previews.costmap_ts,
             safety=safety,
+            robot_link=self._robot_link(),
         )
 
+    def _publish_launcher_connections(self) -> None:
+        publisher = getattr(self, "_launcher_connections", None)
+        if publisher is None or not publisher.enabled:
+            return
+        link = self._robot_link()
+        if link is not None:
+            status = link.status
+        elif self._launcher_feedback is not None:
+            status = "online" if self._launcher_feedback else "offline"
+        else:
+            status = "online" if self._odometry.latest() is not None else "waiting"
+        publisher.publish(
+            self._launcher_robot_name,
+            status,
+            self._ws_server.active_client_ids,
+        )
+
+    def _on_launcher_feedback(self, available: bool) -> None:
+        if self._launcher_feedback != available:
+            self._launcher_feedback = available
+            self._publish_launcher_connections()
+
     def _broadcast_state(self) -> None:
+        self._publish_launcher_connections()
         snapshot = self._state_snapshot()
         subscriptions = getattr(self, "_lidar_subscriptions", {})
         if subscriptions:
@@ -663,6 +711,7 @@ class ARModule(Module):  # type: ignore[misc]
         self._localization.connect(client_id)
 
     def _on_client_suspend(self, client_id: str, deadline: float) -> None:
+        self._publish_launcher_connections()
         if (
             self._interaction_controller.state.suspend(client_id, deadline)
             and self._manipulation_service is not None
@@ -717,6 +766,71 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _start_interaction_poll(self) -> None:
         self._interaction_controller.start()
+        if self._monitor_live_go2:
+            self._link_task = asyncio.create_task(self._watch_robot_link())
+
+    def _has_fresh_live_odometry(self) -> bool:
+        return (
+            getattr(self, "_go2_peer_online", None) is not False
+            and not getattr(self, "_link_offline", False)
+            and self._live_odom_at is not None
+            and live_time() - self._live_odom_at < 1.0
+        )
+
+    def _live_motion_ready(self) -> bool:
+        return not getattr(self, "_monitor_live_go2", False) or self._has_fresh_live_odometry()
+
+    def _robot_link(self) -> RobotLink | None:
+        if not getattr(self, "_monitor_live_go2", False):
+            return None
+        status: Literal["waiting", "online", "offline"]
+        if self._has_fresh_live_odometry():
+            status, reason = "online", None
+        elif self._live_odom_at is None:
+            status, reason = "waiting", "waiting_for_odometry"
+        else:
+            status = "offline"
+            reason = (
+                "peer_disconnected"
+                if getattr(self, "_go2_peer_online", None) is False
+                else "odometry_stale"
+            )
+        if reason is None:
+            if self._safety.stopped:
+                reason = "emergency_stopped"
+            elif (
+                self._interaction_controller.native_mode_uncertain
+                or (
+                    isinstance(self._navigation_service, NavigationControlService)
+                    and (self._navigation_service.faulted or self._navigation_service.stop_pending)
+                )
+            ):
+                reason = "native_retirement_pending"
+        return RobotLink(status, self._link_generation, reason is None, reason)
+
+    def _retire_stale_link(self) -> None:
+        if self._live_odom_at is None or self._has_fresh_live_odometry():
+            return
+        if self._link_offline:
+            return
+        self._link_offline = True
+        self._link_generation += 1
+        self._cancel_tele_cmd_vel()
+        self._interaction_controller.state.stop("robot_link_lost")
+        self._interaction_controller.stop_agent()
+        self._drain_interaction_retirements()
+        self._localization.retire_pending()
+        self._robot_observations.clear()
+        self._state_publisher.invalidate_source()
+        self._previews.cancel_all()
+        self._safety.controlled_stop()
+        self._broadcast_interaction()
+        self._broadcast_state()
+
+    async def _watch_robot_link(self) -> None:
+        while True:
+            self._retire_stale_link()
+            await asyncio.sleep(0.1)
 
     def _broadcast_interaction(self, *, force: bool = False) -> None:
         return self._interaction_controller.broadcast(force=force)
@@ -735,7 +849,11 @@ class ARModule(Module):  # type: ignore[misc]
 
     def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
         service = self._navigation_service
-        if service is None or self._safety.stopped or getattr(self, "_requires_mapping_restart", False):
+        if (
+            service is None
+            or self._safety.stopped
+            or not self._live_motion_ready()
+        ):
             return False
         if isinstance(service, NavigationControlService) and (service.stop_pending or service.faulted):
             return False
@@ -819,6 +937,7 @@ class ARModule(Module):  # type: ignore[misc]
         state = self._interaction_controller.state
         if (
             not self._capabilities.supports(CapabilityName.ESTOP)
+            or not self._live_motion_ready()
             or msg.epoch != state.epoch
             or state.authority is not None
             or self._interaction_controller.mode_task is not None
@@ -895,7 +1014,7 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
         client_id: str,
     ) -> None:
-        if not self._capabilities.supports(CapabilityName.AGENT):
+        if not self._capabilities.supports(CapabilityName.AGENT) or not self._live_motion_ready():
             return
         if self.human_input.transport is None:
             logger.warning("user_message_request ignored — human_input transport is not wired")
@@ -927,9 +1046,11 @@ class ARModule(Module):  # type: ignore[misc]
         _websocket: ws_server.ServerConnection,
         _client_id: str,
     ) -> None:
-        if not self._capabilities.supports_navigation(NAV_JOYSTICK) or getattr(
-            self, "_requires_mapping_restart", False
-        ) or self._safety.stopped:
+        if (
+            not self._capabilities.supports_navigation(NAV_JOYSTICK)
+            or self._safety.stopped
+            or not self._live_motion_ready()
+        ):
             return
         service = self._navigation_service
         if isinstance(service, NavigationControlService) and (service.stop_pending or service.faulted):
@@ -945,7 +1066,8 @@ class ARModule(Module):  # type: ignore[misc]
         publisher.handle(msg)
 
     def _publish_tele_cmd_vel(self, twist: Twist) -> None:
-        self.tele_cmd_vel.publish(twist)
+        if self._live_motion_ready() or not (twist.linear.x or twist.linear.y or twist.angular.z):
+            self.tele_cmd_vel.publish(twist)
 
     def _cancel_tele_cmd_vel(self) -> None:
         publisher = getattr(self, "_tele_cmd_vel_publisher", None)
@@ -1012,7 +1134,17 @@ class ARModule(Module):  # type: ignore[misc]
             msg.ts = timestamp
         await self._state_publisher.publish_lidar_async(msg, lidar=self._lidar_settings)
 
+    async def handle_go2_peer_online(self, msg: Bool) -> None:
+        if not self._monitor_live_go2:
+            return
+        self._go2_peer_online = bool(msg.data)
+        if not self._go2_peer_online:
+            self._retire_stale_link()
+
     async def handle_odom(self, msg: PoseStamped) -> None:
+        if getattr(self, "_go2_peer_online", None) is False:
+            return
+        first_pose = self._odometry.latest() is None
         try:
             accepted = self._odometry.accept(msg)
         except RobotSourceChangedError:
@@ -1020,7 +1152,22 @@ class ARModule(Module):  # type: ignore[misc]
             return
         if accepted is None:
             return
-        self._state_publisher.publish_odom(accepted.sample)
+        if getattr(self, "_monitor_live_go2", False):
+            if not -0.25 <= time.time() - accepted.sample.ts_server < 1.0:
+                return
+            self._retire_stale_link()
+            changed = self._live_odom_at is None or self._link_offline
+            self._live_odom_at = live_time()
+            self._link_offline = False
+            if changed:
+                self._broadcast_state()
+            self._state_publisher.publish_odom(
+                accepted.sample, source_generation=self._link_generation
+            )
+        else:
+            self._state_publisher.publish_odom(accepted.sample)
+            if first_pose:
+                self._publish_launcher_connections()
         self._robot_observations.expire(self._odometry.travel())
 
     def _retire_robot_source(self) -> None:
@@ -1036,19 +1183,20 @@ class ARModule(Module):  # type: ignore[misc]
         self._interaction_controller.state.reset()
         self._broadcast_interaction()
         self._odometry.retire()
+        if getattr(self, "_monitor_live_go2", False):
+            self._link_generation += 1
+            self._live_odom_at = None
+            self._link_offline = False
         publisher = getattr(self, "_state_publisher", None)
         if publisher is not None and hasattr(publisher, "invalidate_source"):
             publisher.invalidate_source()
         self._previews.cancel_all()
-        self._requires_mapping_restart = True
         self._robot_observations.clear()
         self._localization.reset()
-        if self._native_map is not None:
-            self._native_map.reset()
         self._cancel_tele_cmd_vel()
-        self._safety.on_estop_request()
-        self._ws_server.schedule_disconnect_all("robot odometry reset; restart mapping")
-        logger.warning("robot odometry source changed; restart DimOS mapping")
+        self._safety.controlled_stop()
+        self._ws_server.schedule_disconnect_all("robot odometry reference changed")
+        logger.warning("robot odometry source changed")
 
     async def handle_camera_info(self, msg: CameraInfo) -> None:
         if self._profile.T_base_camera_optical is None:

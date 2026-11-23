@@ -21,7 +21,8 @@ export APT_CONFIG="$apt_config"
 # Keep the same strict network policy in apt spawned by Playwright. Running only
 # install-deps as root leaves browser downloads in the normal user's cache.
 sudo --preserve-env=APT_CONFIG apt-get update
-sudo --preserve-env=APT_CONFIG apt-get install -y --no-install-recommends libegl1 ffmpeg
+sudo --preserve-env=APT_CONFIG apt-get install -y --no-install-recommends \
+  libegl1 ffmpeg portaudio19-dev libturbojpeg0-dev
 if [[ "$mode" == webxr ]]; then
   sudo --preserve-env=APT_CONFIG "$(command -v node)" \
     "$root/clients/webxr/node_modules/playwright/cli.js" install-deps chromium

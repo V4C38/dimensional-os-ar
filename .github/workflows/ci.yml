@@ -119,6 +119,7 @@ jobs:
             Review Data/webxr_golden-path.mp4
             Review Data/webxr/
             Review Data/unit/webxr/
+            Review Data/unit/launcher-browser/
             Review Data/unit/integration-tooling/
             Review Data/coverage/webxr/
           retention-days: 14

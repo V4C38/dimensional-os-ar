@@ -99,7 +99,7 @@ async def test_planner_start_failure_has_no_process_side_effects(tmp_path, monke
     cleanup = AsyncMock()
     monkeypatch.setattr(manager, "_clear_before_start", cleanup)
     with pytest.raises(ValueError, match="does not match"):
-        await manager.start_armodule(blueprint="openyam_ar_planner", client="webxr")
+        await manager.start_armodule(blueprint="openyam_ar_planner")
     cleanup.assert_not_awaited()
     assert manager.runtime.backend.process is None
 

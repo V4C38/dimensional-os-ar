@@ -1,6 +1,6 @@
 import { getRobotActivityState, type RobotActivityState, type RobotSelection } from "@dimos-ar-client/robot/RobotPresentation";
 
-import { OperatingModeController, availableFeatures, localizationGuidance, localizationProviderLabel, localizationKind, localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkStatus, sessionLinkTransitionLog, type SessionLinkPhase, type StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
+import { OperatingModeController, availableFeatures, localizationGuidance, localizationProviderLabel, localizationKind, localizationCaptureStatus, deriveSessionLinkPhase, robotConnectionLabel, Go2RecoveryReview, sessionLinkStatus, sessionLinkTransitionLog, type SessionLinkPhase, type StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 export { availableFeatures } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import { SetupFlow, type SetupStep } from "@dimos-ar-client/presentation/SetupFlow";
 import { LidarDisplayController, type LidarDisplayPreferences, type LidarDisplayMode } from "@dimos-ar-client/sensors/LidarDisplay";
@@ -96,6 +96,7 @@ export class WebXRUIPresenter {
   }
   get setupCompleted(): boolean { return this.flow.completed; }
   menuOpen = false;
+  private readonly go2RecoveryReview = new Go2RecoveryReview();
   private linkPhase: SessionLinkPhase = "disconnected";
   private hudText: string | null = null;
   private hudTone: StatusTone | null = null;
@@ -126,6 +127,8 @@ export class WebXRUIPresenter {
     const prevPhase = prev ? deriveSessionLinkPhase(prev) : this.linkPhase;
     const nextPhase = deriveSessionLinkPhase(view);
     this.linkPhase = nextPhase;
+    const recovered = this.go2RecoveryReview.observe(view);
+    if (recovered && this.setupCompleted) this.requestAlignmentReview("tracking-loss");
     const transition = sessionLinkTransitionLog(prevPhase, nextPhase);
     if (transition && this.setupCompleted) {
       this.hudText = transition.hudText;
@@ -185,7 +188,7 @@ export class WebXRUIPresenter {
       localizationIssue: issue,
       robotName: view.hello?.robot.display_name ?? this.lastRobotName,
       robotSelected: selection.selected,
-      robotConnectionText: { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[deriveSessionLinkPhase(view)],
+      robotConnectionText: robotConnectionLabel(deriveSessionLinkPhase(view)),
       robotSelectable: selection.eligible,
       debugEnabled: this.debugEnabled,
       hasTrackingOrigin: view.hasTrackingOrigin,

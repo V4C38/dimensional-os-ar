@@ -330,7 +330,6 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       isSelected: () => this.selection.isSelected(),
       select: () => this.selection.setSelected(true),
       isSetupCompleted: () => this.uiPresenter.isSetupCompleted() && !this.uiPresenter.isAlignmentReviewPending(),
-      emergencyStop: () => this.emergencyStop(),
     });
     this.speechController = speechController;
     this.uiPresenter.attachVoice(speechController, tts);
@@ -410,7 +409,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
 
   private syncSelectionEligibility(): void {
     this.selection.setEligible(isSelectionEligible(this.session!.view(), this.uiPresenter.isSetupCompleted(),
-      this.uiPresenter.isAlignmentReviewPending(), this.manipulation?.core.interaction.retainingFeedback ?? false));
+      false, this.manipulation?.core.interaction.retainingFeedback ?? false));
   }
 
   private maybeSendClientPose(): void { this.posePublisher?.tick(); }

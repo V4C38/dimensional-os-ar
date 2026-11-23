@@ -39,6 +39,7 @@ from dimos.ar.websocket.protocol import (
     UserMessageRequest,
     encode_state,
 )
+from dimos.core.global_config import GlobalConfig
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.nav_msgs.Path import Path
 from test_support.module import (
@@ -1024,7 +1025,7 @@ def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None
     assert order == ["state", "planner"]
 
 
-async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart() -> None:
+async def test_changed_robot_frame_retires_origins_and_keeps_navigation_available() -> None:
     from dimos.ar.robot.odometry import PoseBuffer
 
     module = _module_with_localization(["vps"])
@@ -1047,15 +1048,50 @@ async def test_changed_robot_frame_retires_origins_and_requires_mapping_restart(
     module._robot_observations.clear.assert_called_once()
     module._ws_server.schedule_disconnect_all.assert_called_once()
     hello = module._hello_body("client")
-    assert not hello.capabilities[CapabilityName.NAVIGATION].available
-    assert not hello.navigation_inputs[NAV_GOAL].available
+    assert hello.capabilities[CapabilityName.NAVIGATION].available
+    assert hello.navigation_inputs[NAV_GOAL].available
+    module._nav_goal_coordinator.submit_goal = Mock(return_value=object())
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
     module._on_nav_goal_request(
         _authorized_request(module, NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), "client"),
         None,
         "client",
     )
-    module.goal_request.publish.assert_not_called()
+    module.goal_request.publish.assert_called_once()
+
+
+async def test_live_go2_long_outage_recovers_navigation_on_fresh_odometry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import dimos.ar.module as ar_module
+
+    now = [10.0]
+    monkeypatch.setattr(ar_module, "live_time", lambda: now[0])
+    module = _module_with_localization([])
+    module._monitor_live_go2 = True
+    module._live_odom_at = None
+    module._link_offline = False
+    module._link_generation = 0
+    module._localization.retire_pending = Mock()
+    module._state_publisher = Mock()
+    module._robot_observations = Mock()
+    module._tele_cmd_vel_publisher = Mock()
+    module.stop_movement = SimpleNamespace(transport=object(), publish=Mock())
+    module._nav_goal_coordinator.submit_goal = Mock(return_value=object())
+    module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
+
+    await module.handle_odom(PoseStamped(ts=time.time(), frame_id="world", position=[1, 0, 0]))
+    now[0] += 30.0
+    module._retire_stale_link()
+    request = NavGoalRequest((2, 0, 0), (0, 0, 0, 1))
+    assert module._robot_link().status == "offline"
+    assert not module._submit_navigation_goal(request)
+
+    await module.handle_odom(PoseStamped(ts=time.time(), frame_id="world", position=[1, 0, 0]))
+    assert module._robot_link().status == "online"
+    assert module._robot_link().motion_ready
+    assert module._submit_navigation_goal(request)
+    module.goal_request.publish.assert_called_once()
 
 
 async def test_robot_image_pairing_preserves_producer_time_and_encodes_off_loop(
@@ -1246,6 +1282,31 @@ def test_old_disconnect_does_not_stop_a_valid_suspended_successor():
     module._on_client_disconnect(None, "old")
     assert module._interaction_controller.state.authority.client_id == "current"
     service.emergency_stop.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("replay", "simulation", "ip", "recorded", "hardware"),
+    [
+        (False, "", "192.168.1.42", False, True),
+        (True, "", None, True, False),
+        (False, "", "mock", True, False),
+        (False, "", "mujoco", False, False),
+        (False, "dimsim", None, False, False),
+    ],
+)
+def test_go2_monitor_follows_native_connection_mode(replay, simulation, ip, recorded, hardware):
+    module = ARModule(
+        robot=RobotName.UNITREE_GO2,
+        g=GlobalConfig(replay=replay, simulation=simulation, robot_ip=ip),
+        port=0,
+        ip_relay_url=None,
+    )
+    try:
+        module.build()
+        assert module._replay_mode is recorded
+        assert module._monitor_live_go2 is hardware
+    finally:
+        module.stop()
 
 
 def test_start_after_failed_build_preserves_the_build_error(monkeypatch):

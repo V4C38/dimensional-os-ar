@@ -245,6 +245,10 @@ class WebSocketServer:
         return len(self._active_connections())
 
     @property
+    def active_client_ids(self) -> tuple[str, ...]:
+        return tuple(connection.client_id for connection in self._active_connections())
+
+    @property
     def logical_session_count(self) -> int:
         return sum(
             session.connection is not None or session.disconnect_handle is not None

@@ -37,7 +37,7 @@ describe("deriveSessionLinkPhase", () => {
 
 describe("sessionLinkStatus", () => {
   it("matches connection status strings", () => {
-    expect(sessionLinkStatus(baseView()).text).toContain("- Disconnected -");
+    expect(sessionLinkStatus(baseView()).text).toContain("dimOS disconnected");
     expect(sessionLinkStatus(baseView()).color).toBe("error");
     expect(sessionLinkStatus(baseView({ connection: "ready", hello: {} as any })).text).toContain(
       "Waiting for robot telemetry",
@@ -61,7 +61,7 @@ describe("sessionLinkStatus", () => {
 describe("sessionLinkTransitionLog", () => {
   it("logs robot connect/disconnect transitions", () => {
     expect(sessionLinkTransitionLog("connected", "robotOffline")?.consoleText).toBe(
-      "Robot disconnected",
+      "Robot disconnected.",
     );
     expect(sessionLinkTransitionLog("connected", "robotOffline")?.consoleColor).toBe("error");
     expect(sessionLinkTransitionLog("robotOffline", "connected")?.consoleText).toBe("Robot connected");

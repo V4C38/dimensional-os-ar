@@ -25,6 +25,12 @@ from dimos.msgs.sensor_msgs.Image import Image
 from dimos.msgs.sensor_msgs.JointState import JointState
 from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
 from dimos.msgs.std_msgs.Float32 import Float32
+from dimos.robot.manipulators.openyam.joints import OPENYAM_ARM_JOINTS, OPENYAM_GRIPPER_JOINT
+
+
+def _openyam_joint_names(sample: JointState) -> list[str]:
+    # Earlier OpenYAM recordings stored the same arm measurements without the robot namespace.
+    return [f"arm/{name}" if name in OPENYAM_ARM_JOINTS else name for name in sample.name]
 
 
 def inspect_recording(
@@ -71,14 +77,14 @@ def inspect_recording(
         if robot == "openyam" and "joints" in streams:
             from dimos.robot.manipulators.openyam.config import make_openyam_model_config
 
-            names = set(make_openyam_model_config().joint_names)
+            names = set(make_openyam_model_config(robot="arm").joint_names)
             for observation in store.stream(streams["joints"]):
                 sample = observation.data
+                sample_names = _openyam_joint_names(sample) if isinstance(sample, JointState) else []
                 if (
-                    not isinstance(sample, JointState)
-                    or len(set(sample.name)) != len(sample.name)
-                    or len(sample.position) != len(sample.name)
-                    or not names.issubset(sample.name)
+                    not names.issubset(sample_names)
+                    or len(set(sample_names)) != len(sample_names)
+                    or len(sample.position) != len(sample_names)
                     or not all(math.isfinite(q) for q in sample.position)
                 ):
                     raise ValueError(
@@ -159,7 +165,7 @@ class RecordedARModule(ARModule):
             )
             from dimos.robot.manipulators.openyam.config import make_openyam_model_config
 
-            self._arm_model = make_openyam_model_config()
+            self._arm_model = make_openyam_model_config(robot="arm")
             frames = tuple(g.tip_link for g in self._arm_model.planning_groups if g.tip_link)
             self._arm_fk = PinkPoseTargetSolver(
                 PoseTargetIKTaskConfig(
@@ -172,7 +178,7 @@ class RecordedARModule(ARModule):
                 self._arm_model.model.load().xml,
                 "/models/openyam.glb",
                 visual_profile="openyam",
-                gripper_open_at_lower=["joint7", "joint8"],
+                gripper_joint_names=[OPENYAM_GRIPPER_JOINT],
             )
 
     def _hello_body(self, client_id: str) -> Any:
@@ -220,7 +226,7 @@ class RecordedARModule(ARModule):
         subscriptions = []
         for role, stream in streams.items():
             subscriptions.append(
-                stream.observable().subscribe(
+                stream.observable(skip_late=False).subscribe(
                     lambda sample, role=role: self._loop.call_soon_threadsafe(
                         lambda: self._schedule_sample(role, sample)
                     )
@@ -283,6 +289,8 @@ class RecordedARModule(ARModule):
             await getattr(self, f"handle_{role}")(msg)
 
     def _publish_arm(self, sample: JointState) -> None:
+        sample = copy.copy(sample)
+        sample.name = _openyam_joint_names(sample)
         frames = tuple(g.tip_link for g in self._arm_model.planning_groups if g.tip_link)
         poses = self._arm_fk.frame_poses(sample, frames)
         joints = dict(zip(sample.name, sample.position, strict=True))

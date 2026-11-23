@@ -12,7 +12,6 @@ import type { ARModuleSessionState } from "@dimos-ar-client/websocket/ARModuleSe
 import type { Quat, Vec3 } from "@dimos-ar-client/ClientContracts";
 import type { StatusTone } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import {
-  clientTrackingToWebxrPoint,
   clientTrackingToWebxrPose,
 } from "../utilities/WebXRCoordinates";
 import { registerRayTarget } from "../input/WebXRInteraction";
@@ -56,7 +55,6 @@ export class WebXRRobotPresenter {
   private readonly tagTitle: Text;
   private readonly tagStatus: Text;
   private readonly tagMessage: Text;
-  private robotHeightM = 0;
   private baseHeightM = 0;
   private readonly targetPosition = new THREE.Vector3();
   private readonly targetRotation = new THREE.Quaternion();
@@ -64,7 +62,6 @@ export class WebXRRobotPresenter {
   private readonly correction: MarkerCorrectionRenderer;
   private correctionTime = 0;
   private floorOffset: Vec3 = [0, 0, 0];
-  private unlocalizedCommitted = false;
 
   constructor() {
     this.object = new THREE.Group();
@@ -164,24 +161,27 @@ export class WebXRRobotPresenter {
     view: ARModuleSessionState,
     origin: ClientTrackingOrigin | null,
     setupCompleted: boolean,
-    fallbackPosition: Vec3 | null,
   ): void {
     const input = deriveRobotMarkerApplyInput({ setupCompleted, view, origin });
     if (input.mode === "hidden") {
       this.reset();
       return;
     }
-    if (input.mode === "localizedPending") {
+    const live = input.mode === "localizedOdom";
+    this.collider.userData.interactionEnabled = this.markerCollider.userData.interactionEnabled = live;
+    if (input.mode === "lastSeen") {
+      const pose = clientTrackingToWebxrPose(input.sighting);
+      this.lastOrigin = null;
       this.correction.reset();
-      this.collider.userData.interactionEnabled = this.markerCollider.userData.interactionEnabled = false;
+      this.object.position.fromArray(pose.position);
+      this.object.quaternion.fromArray(pose.orientation);
+      this.updateBounds(input.robot.body_bounds_m, input.robot.base_height_m);
+      this.baseHeightM = input.robot.base_height_m;
+      this.object.userData.title = input.robot.display_name;
+      this.object.userData.coordinates = "";
+      this.object.visible = true;
       return;
     }
-    this.collider.userData.interactionEnabled = this.markerCollider.userData.interactionEnabled = true;
-    if (input.mode === "unlocalizedFallbackPosition") {
-      this.applyUnlocalized(input, fallbackPosition);
-      return;
-    }
-    this.unlocalizedCommitted = false;
     this.applyLocalized(input);
   }
 
@@ -233,7 +233,7 @@ export class WebXRRobotPresenter {
     this.outlineRenderer.setStyle(animation.width, animation.opacity);
     const alpha = 1 - Math.exp(-32 * Math.max(0, deltaS));
     this.floorProgress +=
-      ((this.floorVisible ? 1 : 0) - this.floorProgress) * alpha;
+      ((this.floorVisible && this.lastOrigin ? 1 : 0) - this.floorProgress) * alpha;
     (this.floorCircle.material as THREE.MeshBasicMaterial).opacity =
       this.circleOpacity;
     this.floorCircle.visible = this.floorProgress > 0.001;
@@ -251,7 +251,7 @@ export class WebXRRobotPresenter {
 
   feedback(info: RobotFeedback): void {
     const title = String(this.object.userData.title || "Robot");
-    const status = info.activity;
+    const status = this.object.visible && !this.lastOrigin ? "Last seen" : info.activity;
     const message = String(this.object.userData.coordinates ?? "");
     (this.labelGroup as RobotMarkerLabel).setFeedback(
       title,
@@ -282,7 +282,8 @@ export class WebXRRobotPresenter {
       .multiply(worldRotation);
   }
 
-  floorCircleBounds(): { center: Vec3; radius: number } {
+  floorCircleBounds(): { center: Vec3; radius: number } | undefined {
+    if (!this.object.visible || !this.lastOrigin) return undefined;
     const center = this.floorCircle
       .getWorldPosition(new THREE.Vector3())
       .toArray() as Vec3;
@@ -298,7 +299,7 @@ export class WebXRRobotPresenter {
   }
 
   floorPose(): { position: Vec3; orientation: Quat } | null {
-    if (!this.object.visible) return null;
+    if (!this.object.visible || !this.lastOrigin) return null;
     return {
       position: [
         this.object.position.x + this.floorOffset[0],
@@ -310,7 +311,7 @@ export class WebXRRobotPresenter {
   }
 
   worldPosition(): Vec3 | null {
-    return this.object.visible
+    return this.object.visible && this.lastOrigin
       ? [this.object.position.x, this.object.position.y, this.object.position.z]
       : null;
   }
@@ -325,7 +326,6 @@ export class WebXRRobotPresenter {
     this.outline.scale.setScalar(0);
     this.floorCircle.visible = false;
     this.outline.material.opacity = 0;
-    this.unlocalizedCommitted = false;
     this.lastOrigin = null;
     this.object.userData.title = "";
     this.object.userData.activity = "";
@@ -370,7 +370,6 @@ export class WebXRRobotPresenter {
     this.object.userData.coordinates =
       input.view.pose?.position.map((value) => value.toFixed(2)).join(", ") ??
       "";
-    this.robotHeightM = input.robot.body_bounds_m[2];
     this.baseHeightM = input.robot.base_height_m;
     this.updateFloorOffset();
     this.updateLabelPosition();
@@ -378,46 +377,6 @@ export class WebXRRobotPresenter {
     this.object.userData.activity = getRobotActivityState(input.view);
     this.object.visible = true;
     this.updateCorrection();
-  }
-
-  private applyUnlocalized(
-    input: Extract<
-      RobotMarkerApplyInput,
-      { mode: "unlocalizedFallbackPosition" }
-    >,
-    fallbackPosition: Vec3 | null,
-  ): void {
-    this.correction.reset();
-    this.lastOrigin = null;
-    if (!this.unlocalizedCommitted) {
-      if (!fallbackPosition) {
-        this.object.visible = false;
-        return;
-      }
-      this.object.position.set(
-        fallbackPosition[0],
-        fallbackPosition[1],
-        fallbackPosition[2],
-      );
-      this.object.quaternion.set(0, 0, 0, 1);
-      this.unlocalizedCommitted = true;
-    }
-    if (input.robot) {
-      this.updateBounds(input.robot.body_bounds_m, input.robot.base_height_m);
-      this.baseHeightM = input.robot.base_height_m;
-      this.robotHeightM = input.robot.body_bounds_m[2];
-      this.floorOffset = clientTrackingToWebxrPoint([
-        0,
-        0,
-        -input.robot.base_height_m,
-      ]);
-    } else {
-      this.floorOffset = [0, -this.robotHeightM * 0.5, 0];
-    }
-    this.updateLabelPosition();
-    this.object.userData.title = robotTitleText(input.view);
-    this.object.userData.activity = getRobotActivityState(input.view);
-    this.object.visible = true;
   }
 
   private updateBounds(bounds: Readonly<Vec3>, baseHeight: number): void {

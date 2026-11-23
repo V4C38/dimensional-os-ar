@@ -126,7 +126,7 @@ export class IntegrationArmGolden {
     const arm = this.root.manipulation, renderer = arm.renderer;
     if (id === "manipulation_select") {
       this.after(.8, () => {
-        const pick = renderer.picks.get("link1"), interactable = pick.getComponent("ScriptComponent");
+        const pick = renderer.picks.get("arm_link_1"), interactable = pick.getComponent("ScriptComponent");
         this.input.active = true; this.input.ray(this.root.cameraObject.getTransform().getWorldPosition(), pick.getTransform().getWorldPosition(), interactable);
         this.input.press({ interactable }, () => arm.input.tick(true));
         // Hidden fills intentionally have no per-frame transform work. Wait for

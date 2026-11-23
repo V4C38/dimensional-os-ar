@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 from dimos.ar.module import (
     ARModule,
@@ -21,6 +21,11 @@ from dimos.ar.robot.profiles.profile import RobotProfile
 from dimos.ar.robot.profiles.unitree_go2 import UNITREE_GO2_PROFILE
 from dimos.ar.sensors.lidar_settings import LidarSettings
 from dimos.ar.spatial import FrameSnapshot
+from dimos.protocol.rpc.spec import RPCSpec
+
+
+class MockRPC(MagicMock, RPCSpec):
+    """Keep native modules and their RPC registrations local to the test."""
 
 
 class _FakeWs:

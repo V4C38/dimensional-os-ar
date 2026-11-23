@@ -3,8 +3,8 @@ export function launcherPresentation({ status, manipulation, simulated, can, pla
   const phase = status.phase || "idle";
   const locked = ["starting", "running", "stopping"].includes(phase);
   const busy = ["checking", "installing", "starting", "stopping"].includes(phase);
-  const canRequired = manipulation && !simulated && can.state !== "not_required";
-  const hardwareMissing = manipulation && (!planner.ready || (canRequired && !can.ready));
+  const canRequired = manipulation && !simulated;
+  const hardwareMissing = manipulation && (!planner.ready || (canRequired && !(can.state === "ready" && can.ready)));
   const dependenciesReady = status.check_ok === true;
   const setupReady = dependenciesReady && (!manipulation || planner.ready);
   return {

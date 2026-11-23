@@ -161,16 +161,16 @@ owner, including replacements still starting. Stop/heartbeat remain independent.
 
 ## Visual assets and platform presentation
 
-The bundled planning ghost derives from canonical per-link OpenYAM visuals, with source
-revision and license in the [model notice](../../../../clients/webxr/public/models/NOTICE.md).
+The bundled planning ghost derives from the per-link OpenYAM visuals selected by DimOS.
+The [model notice](../../../../clients/webxr/public/models/NOTICE.md) identifies the source revision.
 Configured topology/bounds and a normalized visual signature prevent incompatible
 models from using it. Core supports revolute, continuous, prismatic, fixed and mimic
 joints. The `openyam` visual profile and explicit gripper metadata are independent of
 asset URLs. Gripper articulation affects its subtree, never controlled arm joints.
 
-Specs generates native geometry from the same GLB. After replacing it, run
-`python3 clients/specs/tools/export_manipulation_mesh.py` from the repository root.
-Preserve the GLB notice/license and source-generated parity. Native arm GPU opacity
+To rebuild the WebXR GLB, Specs geometry and shared fixture from the installed planning
+model, run `python clients/specs/tools/export_manipulation_mesh.py --from-dimos` from
+the repository root using the DimOS planning environment. Native arm GPU opacity
 and buffers are documented in the [native guide](../../../../clients/specs/tools/README.md#specs-arm-rendering).
 WebXR optionally applies environment depth to bounds/paths; controls, handles and
 mesh ghosts remain excluded. Specs depth occlusion is deferred.
@@ -193,16 +193,20 @@ initialization can emit scaling/translation synchronously.
 
 ## Protection and continuity
 
-The protected adapter intersects planning and physical joint limits, reserving a
+The OpenYAM planning model intersects planning and physical joint limits, reserving a
 three-degree command buffer. Measured feedback uses physical limits; valid starting
 poses in the buffer can recover inward. Recovery trajectories enter monotonically
 and cannot leave the buffer later. Safe-zero resolves against these command limits.
-Collision geometry derived from missing native collision assets preserves exact visual
-origins/scales; only opposing finger self-contact is excepted. Environment collisions
-remain checked. The pinned OpenYAM model lacks collision elements, so the adapter
-derives them from canonical visuals while preserving existing geometry.
+The managed model provides native collision meshes. Both sliding fingers share their
+mount with the fixed palm. Only the two finger-to-palm guide contacts and opposing
+finger contact are added to the native self-collision exclusions. The planner checks
+each link against environment obstacles. The collision world includes the independently
+measured jaw alongside the six arm joints. Its slide coordinate and velocity are mapped
+to the managed mesh convention when feedback enters the model. The native finger task
+retains its original motor calibration. Missing jaw feedback makes planning unavailable.
 
-Physical writes remain bounded. A stationary tracking error above five degrees derates
+`ProtectedOpenYamConnection` enforces the motor policy in the native connection
+process and uses native OpenYAM read, write and hold operations. A stationary tracking error above five degrees derates
 after 200 ms; tracking error alone does not latch Stop. Thermal defaults derate at
 60°C for 500 ms and pause at 70°C or after a five-second thermal warning. The command
 lead envelope is ten degrees in direct following and the hardware boundary. Derating

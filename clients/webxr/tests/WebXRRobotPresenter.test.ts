@@ -43,9 +43,34 @@ function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARMod
   };
 }
 
+const BASE_SIGHTING = { position: [0, 2, 1], orientation: [0, 0, 0, 1], ts: 1, tracking_reference_id: "fixture-tracking" } as const;
+
+const TEST_ORIGIN = {
+  position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number],
+  alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom",
+  tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0,
+};
+function showAligned(robot: WebXRRobotPresenter, state = view()) {
+  robot.apply({ ...state, hasTrackingOrigin: true, pose: {
+    type: "pose", position: BASE_SIGHTING.position, orientation: BASE_SIGHTING.orientation, ts: 1,
+  } }, TEST_ORIGIN, true);
+}
+it("shows a measured last-seen pose without giving it navigation controls", () => {
+  const robot = new WebXRRobotPresenter();
+  robot.apply(view({ baseSighting: BASE_SIGHTING }), null, true);
+  expect(robot.object.visible).toBe(true);
+  expect(robot.object.position.toArray()).toEqual([-2, 1, 0]);
+  expect(robot.collider.userData.interactionEnabled).toBe(false);
+  expect(robot.floorPose()).toBeNull();
+  expect(robot.floorCircleBounds()).toBeUndefined();
+  robot.apply(view(), null, true);
+  expect(robot.object.visible).toBe(false);
+  robot.dispose();
+});
+
 describe("robot presentation", () => {
   it.each([[true, false], [false, true], [true, true], [false, false]])(
-    "shows its marker only with navigation (navigation=%s, manipulation=%s)", (navigation, manipulation) => {
+    "hides an unlocalized marker (navigation=%s, manipulation=%s)", (navigation, manipulation) => {
       const advertised = (available: boolean): Capability => available
         ? { available: true, reason: null } : { available: false, reason: "not supported" };
       const current = view({ capabilities: { ...capabilities,
@@ -53,8 +78,8 @@ describe("robot presentation", () => {
         manipulation: advertised(manipulation),
       } });
       const robot = new WebXRRobotPresenter();
-      robot.apply(current, null, true, [0, 0, -1]);
-      expect(robot.object.visible).toBe(navigation);
+      robot.apply(current, null, true);
+      expect(robot.object.visible).toBe(false);
       robot.dispose();
     },
   );
@@ -63,12 +88,12 @@ describe("robot presentation", () => {
     expect(deriveRobotMarkerApplyInput({ setupCompleted: true,
       view: view({ hello: null, capabilities: null }), origin: null })).toEqual({ mode: "hidden" });
   });
-  it("keeps an unlocalized fallback after setup and uses base_height_m for the floor", () => {
+  it("hides an unlocalized robot after setup and uses base_height_m for the aligned floor", () => {
     expect(deriveRobotMarkerApplyInput({ setupCompleted: false, view: view(), origin: null }).mode).toBe(
       "hidden",
     );
     expect(deriveRobotMarkerApplyInput({ setupCompleted: true, view: view(), origin: null }).mode).toBe(
-      "unlocalizedFallbackPosition",
+      "hidden",
     );
     const robot = new WebXRRobotPresenter();
     const origin = {
@@ -84,7 +109,6 @@ describe("robot presentation", () => {
       }),
       origin,
       true,
-      null,
     );
     const floor = robot.floorPose();
     expect(floor).not.toBeNull();
@@ -138,9 +162,9 @@ it("smooths robot motion with Specs position and rotation rates and snaps fresh 
   const pose = { type: "pose", position: [0, 0, 0.33], orientation: [0, 0, 0, 1], ts: 0 } as const;
   const initial = view({ hasTrackingOrigin: true, pose: { ...pose, position: [...pose.position], orientation: [...pose.orientation] } });
   const aligned: ClientTrackingOrigin = { ...origin, position: [...origin.position], orientation: [...origin.orientation] };
-  robot.apply(initial, aligned, true, null);
+  robot.apply(initial, aligned, true);
   const next = view({ ...initial, pose: { ...initial.pose!, position: [1, 0, 0.33], orientation: [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)] } });
-  robot.apply(next, aligned, true, null);
+  robot.apply(next, aligned, true);
   expect(robot.object.position.z).toBeCloseTo(0);
   robot.tick(0.1);
   expect(robot.object.position.z).toBeCloseTo(-(1 - Math.exp(-0.8)));
@@ -148,9 +172,9 @@ it("smooths robot motion with Specs position and rotation rates and snaps fresh 
   for (let i = 0; i < 50; i++) robot.tick(0.1);
   expect(robot.object.position.z).toBeCloseTo(-1);
   expect(robot.floorPose()!.position[1]).toBeCloseTo(0);
-  robot.apply(next, { ...aligned, position: [0.5, 0, 0] }, true, null);
+  robot.apply(next, { ...aligned, position: [0.5, 0, 0] }, true);
   expect(robot.object.position.z).toBeCloseTo(-0.5);
-  robot.reset(); robot.apply(initial, aligned, true, null);
+  robot.reset(); robot.apply(initial, aligned, true);
   expect(robot.object.position.z).toBeCloseTo(0);
   robot.dispose();
 });
@@ -161,12 +185,12 @@ it("adds only a translucent visual copy during a localization correction", () =>
   const current = view({ hasTrackingOrigin: true,
     pose: { type: "pose", position: [0, 0, 0.33], orientation: [0, 0, 0, 1], ts: 0 } });
   try {
-    robot.apply(current, origin, true, null);
+    robot.apply(current, origin, true);
     const trail = robot.object.getObjectByName("MarkerCorrectionTrail")!;
     expect(trail.visible).toBe(false);
     const before = robot.object.position.clone();
     const aligned = { ...origin, position: [0, 0.4, 0] as [number, number, number] };
-    robot.apply(current, aligned, true, null);
+    robot.apply(current, aligned, true);
     expect(robot.object.position.x).toBeCloseTo(0.4);
     expect(trail.visible).toBe(true);
     expect(trail.getWorldPosition(new THREE.Vector3()).distanceTo(before)).toBeCloseTo(0);
@@ -181,7 +205,7 @@ it("adds only a translucent visual copy during a localization correction", () =>
     expect(trail.children[1].visible).toBe(true);
     robot.tick(0.35);
     expect(trail.visible).toBe(false);
-    robot.apply(current, origin, true, null);
+    robot.apply(current, origin, true);
     robot.reset();
     expect(trail.visible).toBe(false);
   } finally { robot.dispose(); }
@@ -195,7 +219,7 @@ it("orients the invisible body collider with the robot and reverses the outline 
   v.pose = { type: "pose", position: [1, 2, 0.33], orientation: [0, 0, Math.sin(Math.PI / 4), Math.cos(Math.PI / 4)], ts: 1 };
   v.hasTrackingOrigin = true;
   const origin = { position: [0, 0, 0] as [number, number, number], orientation: [0, 0, 0, 1] as [number, number, number, number], alignment_id: "fixture-alignment", shared_frame_id: "fixture-map", odom_reference_id: "fixture-odom", tracking_reference_id: "fixture-tracking", confidence: 1, ts: 0 };
-  robot.apply(v, origin, true, null);
+  robot.apply(v, origin, true);
   expect(robot.collider.scale.toArray()).toEqual([0.5, 0.55, 0.7]);
   expect(robot.collider.position.y - robot.collider.scale.y / 2).toBeCloseTo(-0.33);
   robot.object.updateMatrixWorld(true);
@@ -233,7 +257,7 @@ it("orients the invisible body collider with the robot and reverses the outline 
 });
 
 it("fades its floor circle only when navigation is detached and places the label above the sphere", () => {
-  const robot = new WebXRRobotPresenter(); robot.apply(view(), null, true, [0, 1, -2]);
+  const robot = new WebXRRobotPresenter(); showAligned(robot);
   const circle = robot.object.getObjectByName("Robot floor circle") as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
   robot.tick(1); expect(circle.visible).toBe(false);
   robot.setFloorVisible(true); robot.tick(0.03); expect(circle.material.opacity).toBeGreaterThan(0); expect(circle.material.opacity).toBeLessThan(0.75);
@@ -244,7 +268,7 @@ it("fades its floor circle only when navigation is detached and places the label
 });
 
 it("unfolds horizontally from the floor before rising, reverses on hide, and keeps the collider fixed", () => {
-  const robot = new WebXRRobotPresenter(); robot.apply(view(), null, true, [0, 1, -2]); robot.tick(0);
+  const robot = new WebXRRobotPresenter(); showAligned(robot); robot.tick(0);
   const outline = robot.object.getObjectByName("Robot selection outline")!;
   const colliderScale = robot.collider.scale.clone(), colliderPosition = robot.collider.position.clone();
   expect(outline.scale.toArray()).toEqual([0, 0, 0]);
@@ -263,7 +287,7 @@ it("unfolds horizontally from the floor before rising, reverses on hide, and kee
 });
 
 it("keeps the collapsing box visible, uses physical selected strokes, centers text and ends its connector above the floor circle", () => {
-  const robot = new WebXRRobotPresenter(); robot.apply(view(), null, true, [0, 1, -2]);
+  const robot = new WebXRRobotPresenter(); showAligned(robot);
   robot.feedback({ tone: "success", activity: "Idle" });
   const outline = robot.object.getObjectByName("Robot selection outline") as THREE.Mesh<THREE.InstancedBufferGeometry, THREE.ShaderMaterial>;
   robot.setSelected(true); robot.tick(1);
@@ -288,7 +312,7 @@ it("keeps the collapsing box visible, uses physical selected strokes, centers te
 });
 
 it("plays the exact same box animation backward over the same duration", () => {
-  const robot = new WebXRRobotPresenter(); robot.apply(view(), null, true, [0, 1, -2]);
+  const robot = new WebXRRobotPresenter(); showAligned(robot);
   const outline = robot.object.getObjectByName("Robot selection outline")!;
   robot.setHovered(true); robot.tick(0.06); const quarter = outline.scale.clone();
   robot.tick(0.18); robot.setHovered(false); robot.tick(0.18);
@@ -319,10 +343,10 @@ it("presents Stopped on the navigation robot while shared E-stop is latched", ()
       lidar: { enabled: false, min_height_m: 0, max_height_m: 1, max_range_m: 1 },
       nav: { state: "following_path", outcome: null }, agent: { idle: false },
       safety: { stopped: true, can_resume: true, stop_id: "stop" } } });
-  robot.apply(current, null, true, [0, 1, -2]);
+  showAligned(robot, current);
   expect(robot.object.userData.activity).toBe("Stopped");
   current.state!.safety!.stopped = false;
-  robot.apply(current, null, true, [0, 1, -2]);
+  showAligned(robot, current);
   expect(robot.object.userData.activity).toBe("Following Path");
   robot.dispose();
 });

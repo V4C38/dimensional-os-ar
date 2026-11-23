@@ -82,10 +82,10 @@ describe("activity survives pose presentation", () => {
     ["Thinking", true, false, false],
     ["Idle", false, false, true],
     ["Stopped", true, true, false],
-  ] as const)("preserves %s through localized and deferred fallback updates", (label, asrRunning, ttsPlaying, idle) => {
+  ] as const)("preserves %s through localized updates and labels a private sighting", (label, asrRunning, ttsPlaying, idle) => {
     const presenter = new RobotPresenter();
     const text = { text: "", textFill: { color: null } };
-    const worldVisuals = { labels: vi.fn((_title: string, status: string) => { text.text = status; }), setRobot: vi.fn(), reset: vi.fn() };
+    const worldVisuals = { labels: vi.fn((_title: string, status: string) => { text.text = status; }), setRobot: vi.fn(), reset: vi.fn(), setPickingEnabled: vi.fn() };
     const root = { enabled: true };
     const transform = {
       setWorldPosition: vi.fn(), setWorldRotation: vi.fn(),
@@ -96,16 +96,15 @@ describe("activity survives pose presentation", () => {
     const motionRoot = { enabled: true, getTransform: () => transform };
     Object.assign(presenter, {
       getSceneObject: () => root,
-      motionRoot, presented: true,
+      motionRoot, presented: false,
       worldVisuals,
-      unlocalizedPlaceEvent: { reset: vi.fn() },
     });
     const view = {
       connection: "ready", hello: { robot: GO2 },
       nav: null, state: { agent: { idle }, safety: { stopped: label === "Stopped", can_resume: true } },
     } as unknown as ARModuleSessionState;
     const debugEnabled = false;
-    const ctx = { mainUi: motionRoot as unknown as SceneObject, debugEnabled };
+    const ctx = { debugEnabled };
     presenter.refreshLabels(debugEnabled, view, { asrRunning, ttsPlaying });
     for (let i = 0; i < 3; i++) {
       presenter.apply({
@@ -116,10 +115,12 @@ describe("activity survives pose presentation", () => {
       expect(text.text).toBe(label);
       expect(worldVisuals.labels.mock.calls.at(-1)?.[1]).toBe(label);
     }
-    presenter.apply({ mode: "unlocalizedFallbackPosition", robot: GO2, view }, ctx);
-    // Run the delayed placement callback after the voice-aware label update.
-    (presenter as unknown as { commitUnlocalizedAnchor(): void }).commitUnlocalizedAnchor();
-    expect(text.text).toBe(label);
-    expect(worldVisuals.labels.mock.calls.at(-1)?.[1]).toBe(label);
+    presenter.apply({ mode: "lastSeen", robot: GO2, sighting: {
+      position: [1, 2, 3], orientation: [0, 0, 0, 1], ts: 2, tracking_reference_id: "fixture-tracking",
+    } }, ctx);
+    presenter.refreshLabels(debugEnabled, view, { asrRunning, ttsPlaying });
+    expect(text.text).toBe("Last seen");
+    expect(worldVisuals.setPickingEnabled).toHaveBeenCalledWith(false);
+    expect(presenter.rawFloorPose()).toBeNull();
   });
 });

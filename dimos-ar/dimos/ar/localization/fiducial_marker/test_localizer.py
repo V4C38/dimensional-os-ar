@@ -87,7 +87,11 @@ def test_localizes_rendered_table_marker_from_three_optical_camera_poses(
         allow_latest_robot_pose=replay,
     )
 
-    result = localizer.snapshot().localize(observations)
+    measured = localizer.snapshot().localize_tag(observations)
+    result = measured.alignment
+    assert measured.sighting is not None
+    assert measured.sighting.ts == 100.0
+    assert pose_to_matrix(measured.sighting.pose)[:3, 3] == pytest.approx([0, 0, 0], abs=0.02)
 
     if not succeeds:
         assert result is None
@@ -363,9 +367,15 @@ def test_confidence_uses_only_fusion_inliers(monkeypatch: pytest.MonkeyPatch) ->
     transforms[1][0, 3] = 0.1
     transforms[2][0, 3] = 5.0
     candidates = [
-        fiducial_module._FiducialCandidate(transform=transforms[0], reprojection_error_px=2.4),
-        fiducial_module._FiducialCandidate(transform=transforms[1], reprojection_error_px=2.4),
-        fiducial_module._FiducialCandidate(transform=transforms[2], reprojection_error_px=0.0),
+        fiducial_module._FiducialCandidate(
+            transform=transforms[0], reprojection_error_px=2.4, anchor=np.zeros(3)
+        ),
+        fiducial_module._FiducialCandidate(
+            transform=transforms[1], reprojection_error_px=2.4, anchor=np.zeros(3)
+        ),
+        fiducial_module._FiducialCandidate(
+            transform=transforms[2], reprojection_error_px=0.0, anchor=np.zeros(3)
+        ),
     ]
     monkeypatch.setattr(
         localizer,
@@ -396,7 +406,9 @@ def test_batch_requires_two_agreeing_marker_sightings(
         dictionary_name=UNITREE_GO2_PROFILE.fiducial_dictionary,
     )
     candidates = [
-        fiducial_module._FiducialCandidate(transform=np.eye(4), reprojection_error_px=0.5)
+        fiducial_module._FiducialCandidate(
+            transform=np.eye(4), reprojection_error_px=0.5, anchor=np.zeros(3)
+        )
         if index < matching_sightings
         else None
         for index in range(3)
@@ -424,7 +436,9 @@ def test_batch_rejects_detections_that_disagree_in_position(
     for index, transform in enumerate(transforms):
         transform[0, 3] = index * 2.0
     candidates = [
-        fiducial_module._FiducialCandidate(transform=transform, reprojection_error_px=0.5)
+        fiducial_module._FiducialCandidate(
+            transform=transform, reprojection_error_px=0.5, anchor=np.zeros(3)
+        )
         for transform in transforms
     ]
     monkeypatch.setattr(

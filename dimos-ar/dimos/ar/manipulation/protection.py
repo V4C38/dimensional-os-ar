@@ -5,8 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import time
-from typing import Any
+from typing import Any, Protocol
 
+from dimos.spec.utils import Spec
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -156,26 +157,33 @@ class MotorProtection:
         return True
 
 
-def guard_for(hardware: Any) -> MotorProtection | None:
-    for connected in (hardware or {}).values():
-        guard = getattr(getattr(connected, "_wb_adapter", None), "guard", None)
-        if isinstance(guard, MotorProtection):
-            return guard
-    return None
+class OpenYamProtectionSpec(Spec, Protocol):  # type: ignore[misc]
+    def ar_arm_hold(self, stopped: bool) -> bool: ...
+
+    def ar_motor_protection(self) -> dict[str, Any]: ...
+
+    def ar_resume_motor_protection(self) -> bool: ...
+
+
+@dataclass
+class ProtectionSpeed:
+    """Last protection scale projected from the physical connection for local task timing."""
+
+    scale: float = 0.0
 
 
 def create_trajectory_task(cfg: Any, hardware: Any) -> Any:
-    from copy import copy
-    from dataclasses import replace
-
     from dimos.control.tasks.trajectory_task.trajectory_task import create_task
 
     task = create_task(cfg, hardware)
-    # The polling interface exists for simulated hardware as well as protected motors.
     task.get_endpoint_status = lambda: {"holding_endpoint": False}
-    guard = guard_for(hardware)
-    if guard is None:
-        return task
+    return task
+
+
+def apply_trajectory_protection(task: Any, guard: ProtectionSpeed | MotorProtection) -> Any:
+    from copy import copy
+    from dataclasses import replace
+
     compute = task.compute
     get_status = task.get_status
     cancel = task.cancel

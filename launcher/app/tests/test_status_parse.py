@@ -89,12 +89,24 @@ def test_parse_pin_after_ready(tmp_path: Path) -> None:
     assert mgr.snapshot()["pin"] == "654321"
 
 
+def test_running_timestamp_survives_repeated_readiness(tmp_path: Path, monkeypatch) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    monkeypatch.setattr("armodule.time.time_ns", lambda: 1_700_000_000_000_000_000)
+    mgr.runtime.update_status(phase=Phase.RUNNING)
+    first = mgr.snapshot()["running_since_ms"]
+    assert first == 1_700_000_000_000
+    monkeypatch.setattr("armodule.time.time_ns", lambda: 1_700_000_001_000_000_000)
+    mgr.runtime.update_status(phase=Phase.RUNNING)
+    assert mgr.snapshot()["running_since_ms"] == first
+    mgr.runtime.update_status(phase=Phase.STOPPING)
+    assert mgr.snapshot()["running_since_ms"] is None
+
+
 def test_snapshot_includes_host_ip_not_spectacles(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr.dependencies.update_status(check_ok=True)
     mgr.observe_host_ip("192.168.1.9")
     mgr.runtime.update_status(blueprint="unitree_go2_ar")
-    mgr.runtime.update_status(client="webxr")
     mgr.runtime.update_status(webxr_local_url=f"https://localhost:{WEBXR_PORT}")
     mgr.runtime.update_status(webxr_url=f"https://192.168.1.9:{WEBXR_PORT}")
     snap = mgr.snapshot()
@@ -145,7 +157,6 @@ def test_detect_lan_ip(address, monkeypatch) -> None:
 
 def test_webxr_snapshot_shows_shared_pin(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.runtime.update_status(client="webxr")
     mgr.runtime.update_status(webxr_url="https://192.168.1.9:5173")
     mgr.runtime._parse_armodule_line("PIN: 123456")
     assert mgr.snapshot()["pin"] == "123456"
@@ -178,8 +189,39 @@ def test_vite_urls_recover_unknown_address(tmp_path: Path, ansi: bool) -> None:
 def test_vite_urls_prefer_default_route_interface(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr.observe_host_ip("192.168.1.42")
-    mgr.runtime.update_status(webxr_url="https://192.168.1.42:5173")
+    mgr.runtime._parse_webxr_line("  ➜  Local: https://localhost:5173/")
     mgr.runtime._parse_webxr_line("  ➜  Network: https://172.17.0.1:5173/")
     assert mgr.status.webxr_url == "https://192.168.1.42:5173"
     mgr.runtime._parse_webxr_line("  ➜  Network: https://192.168.1.42:5173/")
     assert mgr.status.webxr_url == "https://192.168.1.42:5173/"
+
+
+def test_connection_rows_replace_the_previous_snapshot(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr("armodule.time.time_ns", lambda: 1_000_000_000)
+    mgr = ProcessManager(root=tmp_path)
+    robot = {"kind": "robot", "status": "waiting", "name": "Go2"}
+    mgr.runtime._parse_armodule_line(
+        'DIMOS_AR_CONNECTIONS [{"kind":"robot","status":"waiting","name":"Go2"},'
+        '{"kind":"client","status":"online","id":"client-1"}]'
+    )
+    assert mgr.snapshot()["connections"] == (
+        robot,
+        {"kind": "client", "status": "online", "id": "client-1", "online_since_ms": 1000},
+    )
+
+    mgr.runtime._parse_armodule_line('DIMOS_AR_CONNECTIONS [{"kind":"robot","status":null}]')
+    assert len(mgr.snapshot()["connections"]) == 2
+
+    monkeypatch.setattr("armodule.time.time_ns", lambda: 2_000_000_000)
+    mgr.runtime._parse_armodule_line(
+        'DIMOS_AR_CONNECTIONS [{"kind":"robot","status":"online","name":"Go2"},'
+        '{"kind":"client","status":"online","id":"client-1"}]'
+    )
+    updated = mgr.snapshot()["connections"]
+    assert updated[0]["online_since_ms"] == 2000
+    assert updated[1]["online_since_ms"] == 1000
+
+    mgr.runtime._parse_armodule_line(
+        'DIMOS_AR_CONNECTIONS [{"kind":"robot","status":"waiting","name":"Go2"}]'
+    )
+    assert mgr.snapshot()["connections"] == (robot,)

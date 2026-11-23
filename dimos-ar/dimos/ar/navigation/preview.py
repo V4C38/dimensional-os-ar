@@ -31,7 +31,7 @@ class PreviewPlanner:
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self._global_config = global_config
-        self._navigation_map = NavigationMap(global_config, "gradient")
+        self._navigation_map = NavigationMap(global_config.robot_width, "gradient")
         self._lock = threading.Lock()
         self._binary_costmap: OccupancyGrid | None = None
         self._gradient_costmap: OccupancyGrid | None = None

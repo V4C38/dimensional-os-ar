@@ -12,7 +12,6 @@ export interface AgentSpeechControllerDeps {
   isSelected: () => boolean;
   select: () => void;
   isSetupCompleted: () => boolean;
-  emergencyStop: () => void;
 }
 
 /** Native speech is an adapter; draft, recording and submission belong to ClientCore. */
@@ -27,7 +26,6 @@ export class SpecsAgentController {
       recognition: this.recognition,
       synthesis: deps.tts,
       send: text => requestUserMessage(deps.session, text),
-      estop: deps.emergencyStop,
       isSelected: deps.isSelected,
       select: deps.select,
     });

@@ -131,7 +131,11 @@ def test_next_target_replaces_timed_out_transport_and_uses_the_current_scene(mon
         return worker
 
     monkeypatch.setattr("dimos.ar.manipulation.adapter.PlanningWorker", factory)
-    module = SimpleNamespace(config=SimpleNamespace(), _lock=threading.RLock(), _last_plan=None)
+    from dimos.manipulation.manipulation_module import ManipulationModule
+    from dimos.robot.manipulators.openyam.config import make_openyam_model_config
+
+    module = ManipulationModule(model=make_openyam_model_config())
+    module._started = True
     adapter = DimOSManipulationAdapter(module)
     adapter.scene_snapshot = Mock(return_value=b"old scene")
     try:
@@ -143,7 +147,7 @@ def test_next_target_replaces_timed_out_transport_and_uses_the_current_scene(mon
         threads[0].join(2)
         adapter.scene_snapshot.return_value = b"current scene"
         result = adapter.plan_to_joints({"arm": "new target"}, speed_scale=0.2)
-        assert result.plan.plan_id == module._last_plan.plan_id == "new-target-plan"
+        assert result.plan.plan_id == module._pending_plan.plan_id == "new-target-plan"
         assert len(workers) == 2
         assert workers[1].channel is not workers[0].channel
         assert workers[1].process is not workers[0].process

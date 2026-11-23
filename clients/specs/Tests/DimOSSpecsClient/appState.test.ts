@@ -82,7 +82,7 @@ describe("deriveRobotMarkerApplyInput", () => {
     ).toEqual({ mode: "hidden" });
   });
 
-  it("returns unlocalizedFallbackPosition with hello robot when not localized", () => {
+  it("hides the robot when localization was skipped", () => {
     const view = baseView({ hello: helloView() });
     expect(
       deriveRobotMarkerApplyInput({
@@ -90,11 +90,7 @@ describe("deriveRobotMarkerApplyInput", () => {
         view,
         origin: null,
       }),
-    ).toEqual({
-      mode: "unlocalizedFallbackPosition",
-      robot: GO2,
-      view,
-    });
+    ).toEqual({ mode: "hidden" });
   });
 
   it("promotes to localizedOdom when a later capture sets the tracking origin", () => {
@@ -118,7 +114,7 @@ describe("deriveRobotMarkerApplyInput", () => {
     });
   });
 
-  it("falls back when hello remains after origin is cleared", () => {
+  it("hides the robot after its origin is cleared", () => {
     const view = baseView({ hello: helloView(), hasTrackingOrigin: false, pose: null });
     expect(
       deriveRobotMarkerApplyInput({
@@ -126,11 +122,7 @@ describe("deriveRobotMarkerApplyInput", () => {
         view,
         origin: null,
       }),
-    ).toEqual({
-      mode: "unlocalizedFallbackPosition",
-      robot: GO2,
-      view,
-    });
+    ).toEqual({ mode: "hidden" });
   });
 });
 

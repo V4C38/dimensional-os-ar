@@ -231,7 +231,7 @@ test("hardware requests call the injected fetch without an object receiver", asy
   await hardware.refreshPlanner(options);
   assert.equal(hardware.plannerStatus.ready, true);
   await hardware.discover({ ...options, robot: "openyam", auto: () => false,
-    progress() {}, received: value => discoveries.push(value) });
+    received: value => discoveries.push(value) });
   assert.equal(discoveries.length, 1);
   assert.deepEqual(calls, [
     ["/api/can/status?interface=can0", undefined],
@@ -258,7 +258,7 @@ test("automatic CAN discovery replaces a stale interface after reconnect", async
   ));
   const options = { enabled: true, scope: () => "arm", changed() {} };
   const discover = () => hardware.discover({
-    ...options, robot: "openyam", auto: () => true, progress() {}, received() {},
+    ...options, robot: "openyam", auto: () => true, received() {},
   });
   await discover();
   await hardware.refreshCan({ ...options, interface: "can1" });

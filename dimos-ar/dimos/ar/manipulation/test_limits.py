@@ -80,45 +80,36 @@ def test_recovery_path_only_enters_the_margin_inward():
 def test_finger_collision_policy_keeps_visuals_and_arm_collisions():
     import pickle
 
-    from dimos.ar.manipulation.model_config import with_finger_self_collision_exclusion
+    from dimos.ar.manipulation.model_config import with_gripper_contact_exclusions
 
     original = safe_openyam_model(make_openyam_model_config())
-    config = with_finger_self_collision_exclusion(original)
+    config = with_gripper_contact_exclusions(original)
     before = ET.fromstring(original.model.load().xml)
     after = ET.fromstring(pickle.loads(pickle.dumps(config.model)).load().xml)
     assert ET.tostring(after) == ET.tostring(before)
-    assert ("tip_left", "tip_right") in config.collision_exclusion_pairs
+    assert set(config.collision_exclusion_pairs) == {
+        ("hand_left_finger", "hand_right_finger"),
+        ("hand", "hand_left_finger"),
+        ("hand", "hand_right_finger"),
+    }
     assert not original.collision_exclusion_pairs
-    assert all(
-        "tip_left" in pair or "tip_right" in pair
-        for pair in config.collision_exclusion_pairs
-    )
 
 
 def test_collision_model_survives_blueprint_config_serialization():
-    from dimos.ar.manipulation.model_config import with_finger_self_collision_exclusion
+    from dimos.ar.manipulation.model_config import with_gripper_contact_exclusions
     from dimos.manipulation.planning.spec.config import RobotModelConfig
 
-    config = with_finger_self_collision_exclusion(safe_openyam_model(make_openyam_model_config()))
+    config = with_gripper_contact_exclusions(safe_openyam_model(make_openyam_model_config()))
     restored = RobotModelConfig.model_validate(config.model_dump())
     assert restored.model.load().xml == config.model.load().xml
     assert restored.model.load().joints == config.model.load().joints
 
 
-def test_openyam_collision_compatibility_preserves_exact_visual_geometry():
-    from dimos.ar.manipulation.model_config import with_openyam_collision_geometry
-
-    original = safe_openyam_model(make_openyam_model_config())
-    config = with_openyam_collision_geometry(original)
+def test_managed_model_retains_native_collision_geometry_for_namespaced_joints():
+    original = make_openyam_model_config(robot="arm")
+    safe = safe_openyam_model(original)
     before = ET.fromstring(original.model.load().xml)
-    after = ET.fromstring(config.model.load().xml)
-    links = {link.attrib["name"]: link for link in before.findall("link")}
-    for link in after.findall("link"):
-        visuals = links[link.attrib["name"]].findall("visual")
-        assert len(link.findall("collision")) == len(visuals)
-        for collision, visual in zip(link.findall("collision"), visuals, strict=True):
-            assert ET.tostring(collision.find("geometry")) == ET.tostring(visual.find("geometry"))
-            assert ET.tostring(collision.find("origin")) == ET.tostring(visual.find("origin"))
-    assert config.joint_names == original.joint_names
-    assert config.model.load().package_paths == original.model.load().package_paths
-    assert with_openyam_collision_geometry(config) is config
+    after = ET.fromstring(safe.model.load().xml)
+    collisions = [ET.tostring(c) for c in before.findall("link/collision")]
+    assert collisions and [ET.tostring(c) for c in after.findall("link/collision")] == collisions
+    assert soft_joint_limits(safe)["arm/yam_joint1"][1] == 1.5708 - math.radians(3)

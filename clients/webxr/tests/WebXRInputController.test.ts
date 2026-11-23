@@ -162,6 +162,7 @@ it("admits an Agent-mode marker takeover while keeping floor placement and arm c
   const source = new THREE.Group(); source.userData.id = 1;
   const marker = new THREE.Group(), sphere = new THREE.Mesh(); marker.add(sphere);
   client.controlsEnabled = () => false;
+  client.navigationControlsEnabled = () => false;
   client.navigationMarkerEnabled = () => true;
   client.originStore = { hasTrackingOrigin: true };
   client.navigation = { marker: { object: marker }, interaction: { ownsDraft: () => false }, clearAim: vi.fn() };

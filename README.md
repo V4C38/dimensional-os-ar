@@ -114,10 +114,10 @@ You switch between **Manual** (spatial controls) and **Agent** mode in the main 
 
 <br>
 
-The launcher is a small local web app that installs DimOS, starts the robot stack with ARModule, and shows the PIN and URL your headset connects with.
+The launcher is a small local web app that installs DimOS, starts the robot stack with ARModule and the WebXR server, and shows the host IP, PIN, and WebXR URL.
 
 <p align="center">
-  <img src="assets/launcher.png" alt="Launcher: robot, source, client, localization, and the PIN and URL" width="800" />
+  <img src="assets/launcher.png" alt="DimOS launcher ready to start, with blueprint, robot source, robot config, and Run blueprint controls" width="800" />
 </p>
 
 Double-click [`Start Launcher.command`](launcher/Start%20Launcher.command), or run:
@@ -128,8 +128,8 @@ Double-click [`Start Launcher.command`](launcher/Start%20Launcher.command), or r
 
 1. Open **http://127.0.0.1:8790**, keep the terminal open.
 2. **Install** DimOS, or point to an existing install. The tested revision is in [`.dimos-revision`](.dimos-revision).
-3. Pick the robot (**Go2** / **OpenYAM**), source (**Device**, **Simulated**, **Recording**) and client (**WebXR** / **SPECS**).
-4. Choose [localization](#localization-alignment), press **Start**, and connect with the displayed **PIN** or URL.
+3. Pick the robot (**Go2** / **OpenYAM**) and source (**Device**, **Simulated**, **Recording**).
+4. Choose [localization](#localization-alignment), press **Start**, and use the displayed **WebXR URL** for WebXR or the host IP and **PIN** for Spectacles.
 
 Install Graphviz on the DimOS host to generate blueprint diagrams
 (`sudo apt install graphviz` on Ubuntu or `brew install graphviz` on macOS).
@@ -146,7 +146,7 @@ environment from the repository root:
 /path/to/dimos/.venv/bin/python3 -m pip install -e './dimos-ar[speech]'
 ```
 
-The DimOS server also needs the `ffmpeg` executable. Reconnect after installation.
+Reconnect after installing the speech dependencies.
 The first recording can prepare the local model; dictation fills a draft and Send
 remains explicit.
 
@@ -229,7 +229,7 @@ Set them in the launcher, or as `armodule.fiducial_marker_mounts` in `~/.config/
 
 VPS registers camera observations against a scanned visual map. Its first connected registration can adopt that map as the shared reference; existing content stays in place physically. Later fixes update alignment beneath that reference.
 
-For a saved DimOS LiDAR map on Go2, set **Saved LiDAR map** in the launcher. It sets `armodule.localization.native_map_file` and `go2relocalization.map_file`; configure both when using the CLI. DimOS registers odometry in that map; ARModule connects it to the shared map. LiDAR and VPS maps have separate origins until registered.
+For a saved DimOS LiDAR map on Go2, set **Saved LiDAR map** in the launcher. Choose a DimOS keyframe map name or a `.map.db` file. The launcher configures `armodule.localization.native_map_file` and `pgovoxelmapper.map_file` together. Set both when using the CLI. For a legacy `.pc2.lcm` point cloud, record a keyframe map with the native `unitree-go2-map` blueprint or clear **Saved LiDAR map** to start with live mapping. DimOS registers odometry in the saved map and ARModule connects that reference to the shared map. LiDAR and VPS maps have separate origins until registered.
 
 | Provider | Status |
 | --- | --- |

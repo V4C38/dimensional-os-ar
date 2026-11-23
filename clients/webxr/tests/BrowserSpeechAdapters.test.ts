@@ -42,7 +42,7 @@ function recorderFixture() {
 it("falls back to recorded local dictation, releases the microphone, and waits for explicit Send", async () => {
   const f = recorderFixture(), send = vi.fn();
   const speech = new AgentDraftSession({ recognition: f.port, synthesis: null, isSelected: () => true,
-    select() {}, send, estop() {} });
+    select() {}, send });
   speech.tick(1, true, null, true); speech.setDraft("Please"); speech.beginRecording();
   await vi.waitFor(() => expect(speech.snapshot().status).toBe("Listening"));
   expect(f.getUserMedia).toHaveBeenCalledWith({ audio: true });
@@ -119,7 +119,7 @@ it("uses graceful browser stop to collect the last words, and aborts immediately
   try {
     const send = vi.fn();
     const speech = new AgentDraftSession({ recognition: browserRecognition(), synthesis: null,
-      isSelected: () => true, select() {}, send, estop() {} });
+      isSelected: () => true, select() {}, send });
     speech.tick(1, true, null, true); speech.beginRecording();
     expect(speech.snapshot().status).toBe("Listening");
     speech.endRecording();

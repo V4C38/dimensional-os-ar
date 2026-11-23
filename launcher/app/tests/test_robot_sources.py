@@ -16,14 +16,14 @@ from robot_sources import (
 )
 
 
-def test_blueprint_metadata_and_shell_menu_share_the_registry():
+def test_blueprint_metadata_and_shell_menu_share_the_registry(app_context):
     import json
 
     from app import StartBody, settings_payload
 
     script = Path(__file__).resolve().parents[1] / "robot_sources.py"
     metadata = json.loads(subprocess.check_output([sys.executable, str(script), "--metadata"]))
-    assert metadata == settings_payload()["defaults"]["blueprints"]
+    assert metadata == settings_payload(context=app_context)["defaults"]["blueprints"]
     menu = subprocess.check_output([sys.executable, str(script), "--menu"], text=True)
     assert menu.splitlines() == [
         f"{item.id}\t{item.label}\t{int(item.manipulation)}" for item in BLUEPRINTS.values()
@@ -92,3 +92,11 @@ def test_start_script_uses_the_same_resolution_as_the_api(monkeypatch):
                                check=True, text=True, capture_output=True, env=os.environ.copy())
     source = resolve_robot_source("openyam", SourceBody(mode="simulated"))
     assert completed.stdout.splitlines() == list(source.cli_arguments("openyam_ar_planner"))
+
+
+def test_openyam_auto_selects_first_discovered_interface():
+    devices = [{"id": "can1", "address": "can1"}, {"id": "can0", "address": "can0"}]
+    assert resolve_robot_source("openyam", SourceBody(mode="auto"), devices).can_port == "can1"
+    assert resolve_robot_source(
+        "openyam", SourceBody(mode="device", device_id="can0"), devices
+    ).can_port == "can0"

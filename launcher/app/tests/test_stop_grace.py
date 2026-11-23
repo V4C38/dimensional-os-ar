@@ -21,9 +21,15 @@ async def test_shutdown_grace(tmp_path: Path, monkeypatch, label: str, grace: fl
         assert timeout == grace
         await awaitable
 
-    with patch("armodule.os.killpg") as killpg, patch("armodule.asyncio.wait_for", wait_for):
+    def signal_group(pid, sig):
+        if sig == 0:
+            raise ProcessLookupError
+
+    with patch("armodule.os.killpg", side_effect=signal_group) as killpg, patch(
+        "armodule.asyncio.wait_for", wait_for
+    ):
         assert await mgr.runtime._stop_one(proc, label)
-    killpg.assert_called_once_with(4242, signal.SIGINT)
+    assert [call.args[1] for call in killpg.call_args_list] == [signal.SIGINT, 0]
 
 
 @pytest.mark.asyncio
@@ -33,14 +39,42 @@ async def test_configurable_grace_still_forces_exit(tmp_path: Path, monkeypatch)
     proc = Mock(pid=4242, returncode=None, wait=AsyncMock())
 
     async def wait_for(awaitable, *, timeout):
-        assert timeout == 90
+        assert timeout in (90, 2)
         await awaitable
-        raise TimeoutError
+        if timeout == 90:
+            raise TimeoutError
 
-    with patch("armodule.os.killpg") as killpg, patch("armodule.asyncio.wait_for", wait_for):
+    def signal_group(pid, sig):
+        if sig == 0:
+            raise ProcessLookupError
+
+    with patch("armodule.os.killpg", side_effect=signal_group) as killpg, patch(
+        "armodule.asyncio.wait_for", wait_for
+    ):
         await mgr.runtime._stop_one(proc, "ARModule")
-    assert [call.args[1] for call in killpg.call_args_list] == [signal.SIGINT, signal.SIGKILL]
+    assert [call.args[1] for call in killpg.call_args_list] == [signal.SIGINT, 0, signal.SIGKILL, 0]
     assert proc.wait.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_cancelled_group_stop_forgets_force_stop_identity(tmp_path: Path) -> None:
+    mgr = ProcessManager(root=tmp_path)
+    entered = asyncio.Event()
+
+    async def wait_for_exit() -> None:
+        entered.set()
+        await asyncio.Event().wait()
+
+    proc = Mock(pid=4242, returncode=None, wait=AsyncMock(side_effect=wait_for_exit))
+    with patch("armodule.os.killpg"):
+        stop = asyncio.create_task(mgr.process_groups.stop(proc, "Test", 60))
+        await asyncio.wait_for(entered.wait(), timeout=1)
+        assert 4242 in mgr.process_groups.stopping_pids
+        stop.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stop
+
+    assert 4242 not in mgr.process_groups.stopping_pids
 
 
 @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf", "invalid"])
@@ -53,7 +87,7 @@ def test_invalid_grace(tmp_path: Path, monkeypatch, value: str) -> None:
 @pytest.mark.asyncio
 async def test_force_stop_bypasses_pending_grace_lock(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
-    mgr.runtime.stopping_pids.add(42424242)
+    mgr.process_groups.stopping_pids.add(42424242)
     await mgr._lock.acquire()
     try:
         process_list = Mock(communicate=AsyncMock(return_value=(b"", b"")))
@@ -100,7 +134,7 @@ async def test_force_stop_reaps_worker_after_group_leader_exits(tmp_path: Path) 
     assert process.stdout is not None
     worker = int(await asyncio.wait_for(process.stdout.readline(), 2))
     mgr = ProcessManager(root=tmp_path)
-    mgr.runtime.stopping_pids.add(process.pid)
+    mgr.process_groups.stopping_pids.add(process.pid)
     try:
         async with asyncio.timeout(2):
             while process.returncode is None:

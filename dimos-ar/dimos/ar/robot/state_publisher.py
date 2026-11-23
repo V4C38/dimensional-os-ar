@@ -123,7 +123,7 @@ class RobotStatePublisher:
             await asyncio.gather(self._lidar_task, return_exceptions=True)
         self._lidar_executor.shutdown(wait=False, cancel_futures=True)
 
-    def publish_odom(self, sample: PoseSample) -> None:
+    def publish_odom(self, sample: PoseSample, *, source_generation: int | None = None) -> None:
         if not self._allow_emit(self._pose_last_emit_mono, self._pose_max_hz):
             return
         if not _is_finite_pose(sample.position, sample.orientation):
@@ -133,7 +133,7 @@ class RobotStatePublisher:
         position, orientation = transform_pose(frame.T_map_odom, sample.position, sample.orientation)
         self._ws.schedule_broadcast_text(
             encode_pose(position=position, orientation=orientation, ts=sample.ts_server,
-                        shared_frame_id=frame.shared_frame_id)
+                        shared_frame_id=frame.shared_frame_id, source_generation=source_generation)
         )
 
     def publish_lidar(

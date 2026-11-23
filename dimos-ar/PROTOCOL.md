@@ -533,6 +533,16 @@ whenever any field changes.
 **`server.connected_clients`:** live WebSocket connections with a completed hello
 handshake to this process.
 
+Live Go2 sessions include the optional `robot_link` object in the initial snapshot
+and on link transitions. `status` is `waiting` before first odometry, `online`
+while odometry is current, and `offline` when odometry expires.
+`source_generation` is a nonnegative integer that advances on retirement.
+`motion_ready` is the server's motion admission fact, and `reason` is a string
+when admission is inhibited or null when available. A client retains the last
+pose for display while offline. While `robot_link` is present, apply a `pose` only
+when the link is online and the pose's `source_generation` matches the link.
+Older servers, replay, and stationary sources may omit these fields.
+
 **`nav.state`:** `"idle"` | `"following_path"` | `"resolved"`
 
 ARModule derives this from DimOS `path` and `goal_reached`. DimOS also declares a
@@ -553,7 +563,7 @@ Where the robot is going, use **`nav_goal`** (route + terminal pose) and **`pose
 ARModule does not record who started navigation.
 
 **`agent.idle`:** `true` when no DimOS agent is configured, before the first
-agent turn, or when `McpClient` reports idle. `false` while the agent is
+agent turn, or when the DimOS `Agent` reports idle. `false` while the agent is
 processing. Always present, same shape as `state.nav`.
 
 ### `agent_message`
@@ -823,6 +833,15 @@ correction may update robot placement only when observed by an independently
 VPS-aligned headset. One observation never updates both independent alignments.
 Failed corrections preserve the accepted estimate; capture/reference and revision
 checks apply equally to tag, VPS and native map updates.
+
+A completed robot capture can include `base_sighting` on its episode-specific
+`localization_status` when it yields a valid rigid tag measurement without a
+shared alignment. The field is private to the submitting client. It contains
+`position` and `orientation` in the headset tracking frame,
+`tracking_reference_id`, and `ts` in the server clock domain for the individual
+image that produced the sighting. The outer `ts` still identifies the capture
+batch. The sighting describes the base at exposure time and carries no shared
+map or motion authority.
 
 `localization_status` contains the current `shared_frame_id`, `odom_reference_id`,
 optional provider `map_code`, `scope` (`robot` or
@@ -1385,8 +1404,8 @@ Whisper. First use can prepare/download the configured model under normal DimOS 
 preparation has a 180-second allowance and warm transcription has 45 seconds.
 Control remains responsive during both operations.
 
-The server advertises and admits local dictation only when `ffmpeg`, its declared
-Python decoder dependencies, and either `faster-whisper` or `openai-whisper` are
+The server advertises and admits local dictation only when PyAV
+and either `faster-whisper` or `openai-whisper` are
 installed. The focused `dimos-ar[speech]` extra supplies faster-whisper without
 requiring the full DimOS web or agent extras. Missing prerequisites are described
 by `hello.speech_transcription_reason`; probing availability never loads a model.

@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from pathlib import Path
 from typing import Any
 
+from config import replace_private_file
 from dimos_config import dimos_config_path
 
 
@@ -14,9 +13,9 @@ def path() -> Path:
     return dimos_config_path().with_name("ar-launcher.json")
 
 
-def read() -> dict[str, Any]:
+def read(target: Path | None = None) -> dict[str, Any]:
     try:
-        data = json.loads(path().read_text())
+        data = json.loads((target or path()).read_text())
         if not isinstance(data, dict):
             raise TypeError("launcher preferences must be a JSON object")
         return data
@@ -24,13 +23,6 @@ def read() -> dict[str, Any]:
         return {}
 
 
-def save(values: dict[str, Any]) -> None:
-    target = path()
-    target.parent.mkdir(parents=True, exist_ok=True)
-    fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=".ar-launcher-")
-    try:
-        with os.fdopen(fd, "w") as stream:
-            json.dump(values, stream, allow_nan=False)
-        os.replace(temporary, target)
-    finally:
-        Path(temporary).unlink(missing_ok=True)
+def save(values: dict[str, Any], target: Path | None = None) -> None:
+    data = json.dumps(values, allow_nan=False).encode("utf-8")
+    replace_private_file(target or path(), data)

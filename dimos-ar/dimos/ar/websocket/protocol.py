@@ -20,6 +20,7 @@ from dimos.ar.localization.types import (
     Intrinsics,
     LocalizationProviderType,
     Observation,
+    TagSighting,
 )
 from dimos.ar.manipulation.protocol import ManipulationRequest, decode_request
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest, NavState
@@ -705,6 +706,14 @@ class AgentState:
 
 
 @dataclass(frozen=True)
+class RobotLink:
+    status: Literal["waiting", "online", "offline"]
+    source_generation: int
+    motion_ready: bool
+    reason: str | None
+
+
+@dataclass(frozen=True)
 class StateSnapshot:
     connected_clients: int
     lidar: LidarSettings
@@ -713,12 +722,22 @@ class StateSnapshot:
     nav_preview_costmap_ts: float | None = None
     playback: dict[str, Any] | None = None
     safety: dict[str, Any] | None = None
+    robot_link: RobotLink | None = None
 
 
 def encode_state(snapshot: StateSnapshot) -> str:
     return encode_text(
         {
             "type": "state",
+            **(
+                {"robot_link": {
+                    "status": snapshot.robot_link.status,
+                    "source_generation": snapshot.robot_link.source_generation,
+                    "motion_ready": snapshot.robot_link.motion_ready,
+                    "reason": snapshot.robot_link.reason,
+                }}
+                if snapshot.robot_link is not None else {}
+            ),
             **({"safety": snapshot.safety} if snapshot.safety is not None else {}),
             **({"playback": snapshot.playback} if snapshot.playback else {}),
             **(
@@ -768,10 +787,12 @@ def encode_pose(
     orientation: tuple[float, float, float, float],
     ts: float,
     shared_frame_id: str = "",
+    source_generation: int | None = None,
 ) -> str:
     return encode_text(
         {
             "type": "pose",
+            **({"source_generation": source_generation} if source_generation is not None else {}),
             "shared_frame_id": shared_frame_id,
             "position": list(position),
             "orientation": list(orientation),
@@ -834,6 +855,25 @@ def encode_lidar_binary(
 
 # interaction_request.cancel_navigation is decoded by replication.interaction;
 # epoch and goal_ts fence cancellation to the current manual navigation goal.
+
+
+class BaseSightingPayload(TypedDict):
+    position: list[float]
+    orientation: list[float]
+    ts: float
+    tracking_reference_id: str
+
+
+def base_sighting_payload(
+    sighting: TagSighting, tracking_reference_id: str
+) -> BaseSightingPayload:
+    pose = sighting.pose
+    return {
+        "position": [pose.x, pose.y, pose.z],
+        "orientation": [pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w],
+        "ts": sighting.ts,
+        "tracking_reference_id": tracking_reference_id,
+    }
 
 
 def encode_localization_pose_status(odom_reference_id: str, *, available: bool) -> str:

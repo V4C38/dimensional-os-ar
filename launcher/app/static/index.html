@@ -3,333 +3,291 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>DimOS ARModule</title>
-    <link rel="stylesheet" href="/static/app.css?v=launcher-controls-7" />
+    <title>dimOS ARModule</title>
+    <link rel="stylesheet" href="/static/app.css?v=launcher-controls-34" />
   </head>
   <body>
     <div class="app">
-      <header class="app-toolbar">
-        <div class="panel-top">
+      <aside class="panel" id="sidePanel">
+        <header class="panel-top">
           <section class="card status-card" id="statusCard">
-            <div class="status-row state-row">
-              <span class="brand-title">DimOS ARModule</span>
-              <div class="state-block">
-                <span class="value state-value" id="stateValue" data-phase="idle">…</span>
-                <span class="state-detail hidden" id="stateDetail"></span>
+            <div class="launcher-title-row">
+              <div class="launcher-identity">
+                <h1 class="brand-title">dimOS ARModule</h1>
+                <span class="state-pill" id="statePill" data-phase="idle" role="status">
+                  <span class="state-check" aria-hidden="true">✓</span>
+                  <span id="stateValue">…</span>
+                </span>
               </div>
+              <button type="button" class="btn ghost" id="toggleLogs" aria-controls="logPanel" aria-expanded="false">View logs</button>
             </div>
+            <p class="state-detail hidden" id="stateDetail"></p>
             <p class="warning hidden" id="warningText"></p>
             <p class="error hidden" id="errorText"></p>
           </section>
-        </div>
-
-        <div class="panel-bottom" id="actionsBar">
-          <div class="actions">
-            <button type="button" class="btn primary" id="startBtn">Start</button>
-            <button type="button" class="btn" id="stopBtn">Stop</button>
-          </div>
-        </div>
-      </header>
-      <aside class="panel" id="sidePanel">
+        </header>
 
         <div class="panel-scroll">
-          <details class="card config-card ip-card" id="ipCard">
-            <summary class="config-summary ip-summary">
-              <span class="ip-summary-collapsed">
-                <span class="label">Host IP</span>
-                <span class="value mono" id="hostIpSummary">—</span>
-                <span class="label">PIN</span>
-                <span class="value mono" id="pinSummary">—</span>
-              </span>
-              <span class="ip-summary-expanded label">Connection</span>
-            </summary>
-            <div class="config-body ip-body">
-              <div class="status-row" id="hostIpRow">
-                <span class="label">Host IP</span>
-                <span class="value mono" id="hostIp">—</span>
-              </div>
-              <div class="status-row">
-                <span class="label">PIN</span>
-                <span class="value mono" id="pin">—</span>
-              </div>
-              <div class="status-row webxr-row hidden" id="webxrNetworkRow">
-                <span class="label">URL</span>
-                <span class="value mono" id="webxrNetwork">—</span>
-              </div>
-              <p class="hint webxr-row hidden" id="webxrHint">
-                Open this URL in Quest Browser and accept the HTTPS certificate warning.
-              </p>
-
-            </div>
-          </details>
-
-          <details class="card config-card deps-card" id="installBanner">
-            <summary class="config-summary deps-summary">
-              <span class="deps-summary-collapsed">
-                <span class="label">dimOS install</span>
-                <span class="value" id="depsSummary"></span>
-              </span>
-            </summary>
-            <div class="config-body deps-body">
-              <fieldset class="radio-group">
-                <label class="check">
-                  <input type="radio" name="setupMode" value="existing" checked />
-                  <span class="check-box" aria-hidden="true"></span>
-                  <span>Use an existing DimOS install</span>
-                </label>
-                <label class="check">
-                  <input type="radio" name="setupMode" value="clone" />
-                  <span class="check-box" aria-hidden="true"></span>
-                  <span>Download DimOS from GitHub</span>
-                </label>
-              </fieldset>
-              <label class="field" id="dimosPythonField">
-                <span>DimOS installation folder (click to browse)</span>
-                <input
-                  type="text"
-                  id="dimosPython"
-                  placeholder="Select the DimOS folder"
-                  autocomplete="off"
-                />
-              </label>
-              <label class="field hidden" id="cloneDirField">
-                <span>Folder to download DimOS into</span>
-                <input type="text" id="cloneDir" autocomplete="off" />
-              </label>
-              <p class="hint hidden" id="installHint">
-                A DimOS environment is required to continue.
-              </p>
-              <label class="field hidden" id="dimosRefField">
-                <span>DimOS git ref</span>
-                <select id="dimosRef">
-                  <option value="main">main</option>
-                </select>
-              </label>
-              <p class="hint hidden" id="dimosVersionHint"></p>
-              <p class="hint hidden" id="plannerStatus" role="status"></p>
-              <button type="button" class="btn primary hidden" id="installBtn">
-                Install
-              </button>
-
-            </div>
-          </details>
-
           <section class="controls" id="controlsCard">
             <div class="selector-group">
-              <label class="selector-label" for="blueprintSelect">Blueprint</label>
-              <select id="blueprintSelect" aria-label="Blueprint">
-                <option value="">Loading blueprints…</option>
-              </select>
-              <p class="blueprint-info" id="blueprintInfo"></p>
-
-              <label class="selector-label" for="robotSource">Connected robot</label>
-              <div class="connection-selector"><select id="robotSource"><option value="auto">Auto (scan on startup)</option><option value="simulated">Simulate hardware</option></select><button type="button" class="btn ghost" id="editConnection" aria-label="Edit connected robot">✎</button><button type="button" class="btn ghost" id="refreshRobots" aria-label="Refresh robots">↻</button></div>
-            <details class="card config-card hidden" id="canCard">
-              <summary class="config-summary">
-                <span class="deps-summary-collapsed">
-                  <span class="label">CAN setup</span>
-                  <span class="value" id="canSummary">checking…</span>
-                </span>
-              </summary>
-              <div class="config-body">
-                <p class="hint" id="canStatus" role="status">Checking can0…</p>
-                <button type="button" class="btn" id="canSetupBtn">Set up CAN</button>
-                <p class="hint hidden" id="canSetupResult" role="status" aria-live="polite"></p>
-              </div>
-            </details>
-            <details class="card config-card hidden" id="webrtcCard">
-              <summary class="config-summary"><span class="deps-summary-collapsed"><span class="label">WebRTC setup</span><span class="value" id="webrtcSummary" data-phase="">Not scanned</span></span></summary>
-              <div class="config-body"><p class="hint">Find Go2 robots on your local network, then select one under Connected robot.</p><button type="button" class="btn" id="discoverWebrtc">Discover</button></div>
-            </details>
-              <p class="hint" id="discoveryStatus" role="status"></p>
-              <div id="connectionEditor" class="profile-editor hidden"><label class="field">Robot IP address<input id="robotIp" autocomplete="off" placeholder="192.168.1.10" /></label><div class="actions"><button type="button" class="btn" id="saveRobotIp">Save address</button><button type="button" class="btn" id="cancelRobotIp">Cancel</button></div></div>
-              <div id="replayRow" class="hidden">
-                <label class="selector-label" for="playbackSource">Simulation source</label>
-                <div class="connection-selector"><select id="playbackSource"><option value="simulator">Simulator</option><option value="recording">Recording</option></select><button type="button" class="btn ghost" id="editReplay" aria-label="Choose replay">✎</button></div>
-                <p class="hint" id="replayName">Default recording</p>
-                <div id="replayEditor" class="profile-editor hidden"><label class="field">Local recording (.db)<input id="replayPath" autocomplete="off" placeholder="Default recording" /></label><div id="replayStreams"></div><p class="hint" id="replayStatus" role="status"></p><div class="actions"><button type="button" class="btn" id="browseReplay">Browse…</button><button type="button" class="btn" id="defaultReplay">Restore default</button></div></div>
-              </div>
-              <label class="selector-label" for="robotProfileSelect">Robot profile</label>
-              <div class="profile-selector"><select id="robotProfileSelect" aria-label="Robot profile"></select>
-              <button type="button" class="btn ghost profile-pen" id="profileEdit" aria-label="Edit robot profile" aria-expanded="false">✎</button></div>
-              <div id="profileEditor" class="profile-editor hidden">
-                <div class="profile-edit-row">
-                  <input id="robotProfileName" aria-label="Profile name" maxlength="80" />
-                  <button type="button" class="btn" id="saveProfileName" aria-label="Save name" title="Save name">✓</button>
-                  <button type="button" class="btn" id="cancelProfileName" aria-label="Cancel rename" title="Cancel rename">↶</button>
-                  <button type="button" class="btn" id="newRobotProfile" aria-label="New profile" title="New profile">＋</button>
-                  <button type="button" class="btn" id="deleteRobotProfile" aria-label="Delete profile" title="Delete profile">⌫</button>
-                  <button type="button" class="btn" id="profileDone" aria-label="Close profile editor" title="Close">×</button>
-                </div>
-                <p class="error hidden" id="profileError" role="alert"></p>
-                <div id="deleteProfileConfirm" class="hidden"><span>Delete this profile?</span><button type="button" class="btn" id="confirmDeleteProfile">Delete profile</button></div>
-              </div>
-            </div>
-
-            <details class="card config-card" id="locCard" aria-label="Localization">
-              <summary class="config-summary">
-                <span class="deps-summary-collapsed">
-                  <span class="label">Localization</span>
-                  <span class="value" id="locSummary"></span>
-                </span>
-              </summary>
-              <div class="config-body">
-                <section class="localization-policy" aria-label="Localization policy">
-                  <p class="policy-box" id="policyExplanation">
-                    Robot correction prefers a visible fiducial marker, then uses the robot
-                    camera through VPS. Headset VPS alignment refreshes independently after
-                    its travel threshold. All cameras share three VPS queries per 30 seconds.
-                  </p>
-                  <div class="policy-fields">
-                    <label class="field"><span>Robot · Min relocalization distance (m)</span>
-                      <input id="travel_threshold_m" type="number" required min="0.001" step="any" data-localization-policy /></label>
-                    <label class="field"><span>Robot · Min relocalization angle (°)</span>
-                      <input id="heading_threshold_deg" type="number" required min="0.001" max="180" step="any" data-localization-policy /></label>
-                    <label class="field" id="markerPreferenceField"><span>Robot · Prefer fiducial marker for (s)</span>
-                      <input id="marker_preference_s" type="number" required min="0" step="any" data-localization-policy /></label>
-                    <label class="field"><span>Headset · Min relocalization distance (m)</span>
-                      <input id="headset_travel_threshold_m" type="number" required min="0.001" step="any" data-localization-policy /></label>
+              <h2 class="selector-label blueprint-setup-title" id="blueprintSetupTitle">dimOS setup</h2>
+              <div class="blueprint-setup-group" role="group" aria-labelledby="blueprintSetupTitle">
+                <div class="blueprint-picker">
+                  <select class="primary-config-control" id="blueprintSelect" aria-label="Blueprint">
+                    <option value="">Loading blueprints…</option>
+                  </select>
+                  <div class="blueprint-help hidden" id="blueprintHelp">
+                    <button type="button" class="btn btn-icon primary-config-control" id="blueprintHelpBtn"
+                      aria-label="Blueprint information" aria-controls="blueprintInfo"
+                      aria-describedby="blueprintInfo" aria-expanded="false"><span class="blueprint-info-icon" aria-hidden="true">i</span></button>
+                    <p class="blueprint-info" id="blueprintInfo"></p>
                   </div>
-                </section>
-                <div class="provider">
-                  <label class="check">
-                    <input type="checkbox" id="fiducialEnabled" />
-                    <span class="check-box" aria-hidden="true"></span>
-                    <span>Fiducial marker</span>
-                  </label>
-                  <div class="provider-fields hidden" id="fiducialPanel">
-                    <div id="tagList" class="tag-list"></div>
-                    <div class="tag-actions">
-                      <button type="button" class="btn ghost btn-compact" id="addTagBtn">
-                        Add marker
-                      </button>
-                      <button type="button" class="btn ghost btn-compact" id="restoreTagsBtn">
-                        Restore defaults
-                      </button>
+                </div>
+                <details class="card config-card deps-card" id="installBanner">
+                  <summary class="config-summary deps-summary robot-setup-field secondary-control">
+                    <span class="deps-summary-collapsed">
+                      <span class="label">dimOS install</span>
+                      <span class="value" id="depsSummary"></span>
+                    </span>
+                  </summary>
+                  <div class="config-body settings-body">
+                    <div class="settings-row">
+                      <span class="settings-row-label" id="installSourceLabel">Installation source</span>
+                      <fieldset class="install-source radio-group" aria-labelledby="installSourceLabel">
+                        <label>
+                          <input type="radio" name="setupMode" value="existing" checked />
+                          <span>Existing install</span>
+                        </label>
+                        <label>
+                          <input type="radio" name="setupMode" value="clone" />
+                          <span>Download from GitHub</span>
+                        </label>
+                      </fieldset>
+                    </div>
+                    <div class="settings-row" id="dimosPythonField">
+                      <label class="settings-row-label" for="dimosPython">Installation folder</label>
+                      <div class="path-picker">
+                        <input type="text" id="dimosPython" placeholder="Enter a folder path" autocomplete="off" />
+                        <button type="button" class="btn" id="browseDimosInstall">Browse…</button>
+                      </div>
+                    </div>
+                    <div class="settings-row hidden" id="cloneDirField">
+                      <label class="settings-row-label" for="cloneDir">Download folder</label>
+                      <input type="text" id="cloneDir" autocomplete="off" />
+                    </div>
+                    <div class="settings-row hidden" id="dimosRefField">
+                      <label class="settings-row-label" for="dimosRef">Git revision</label>
+                      <select id="dimosRef">
+                        <option value="">Project revision</option>
+                      </select>
+                    </div>
+                    <div class="settings-row settings-feedback">
+                      <div class="settings-row-main">
+                        <p class="settings-hint hidden" id="installHint" role="status">A DimOS environment is required to continue.</p>
+                        <div class="settings-actions">
+                          <p class="settings-hint hidden" id="dimosVersionHint"></p>
+                          <button type="button" class="btn primary hidden" id="installBtn">Install</button>
+                        </div>
+                      </div>
+                    </div>
+                    <div class="settings-row settings-row-divider">
+                      <label class="settings-row-label" for="logLevel">Startup log level</label>
+                      <select id="logLevel"><option value="">Loading levels…</option></select>
                     </div>
                   </div>
+                </details>
+              </div>
+            </div>
+            <div class="selector-group" role="group" aria-label="Robot">
+              <label class="selector-label" for="robotSource">Robot source</label>
+              <select class="primary-config-control" id="robotSource"><option value="auto">Auto (scan on start)</option><option value="simulated">Simulated hardware</option></select>
+              <div class="selector-children secondary-control" id="robotSourceDetails">
+                <div class="robot-setup-row" id="robotSetupRow">
+                  <div class="robot-setup-field hidden" id="canCard">
+                    <span class="label">CAN setup</span>
+                    <span class="value" id="canSummary" role="status">Checking…</span>
+                  </div>
+                  <div class="robot-setup-field hidden" id="webrtcCard">
+                    <span class="label">WebRTC setup</span>
+                    <span class="value" id="webrtcSummary" role="status">Not scanned</span>
+                  </div>
+                  <button type="button" class="btn ghost btn-icon" id="refreshRobots" aria-label="Refresh robots">↻</button>
                 </div>
-                <label class="field" id="nativeMapField">
-                  <span>Saved LiDAR map (optional)</span>
-                  <input type="text" id="nativeMapFile" placeholder="Map name or .pc2.lcm path" autocomplete="off" />
-                </label>
-                <div class="provider">
-                  <label class="check">
-                    <input type="checkbox" id="vpsEnabled" />
-                    <span class="check-box" aria-hidden="true"></span>
-                    <span>VPS</span>
-                  </label>
-                  <div class="provider-fields hidden" id="vpsPanel">
-                    <label class="field">
-                      <span>Vendor</span>
-                      <select id="vpsVendor">
-                        <option value="multiset">MultiSet</option>
-                      </select>
-                    </label>
-                    <label class="field">
-                      <span>Map code</span>
-                      <input type="text" id="mapCode" autocomplete="off" />
-                    </label>
-                    <label class="field">
-                      <span>MULTISET_CLIENT_ID</span>
-                      <input type="text" id="multisetClientId" autocomplete="off" />
-                    </label>
-                    <label class="field">
-                      <span>MULTISET_CLIENT_SECRET</span>
-                      <div class="secret-row">
-                        <input
-                          type="password"
-                          id="multisetClientSecret"
-                          autocomplete="off"
-                        />
-                        <button
-                          type="button"
-                          class="btn ghost"
-                          id="revealMultiset"
-                          aria-label="Show MultiSet secret"
-                        >
-                          Show
-                        </button>
+                <div class="field hidden" id="manualIpField">
+                  <input type="text" id="robotIp" aria-label="Robot IP address" inputmode="decimal" autocomplete="off" placeholder="192.168.1.10" />
+                </div>
+                <div id="replayRow" class="hidden">
+                  <div class="connection-selector"><select id="playbackSource" aria-label="Recording"><option value="">Default recording</option></select><button type="button" class="btn ghost btn-icon" id="editReplay" aria-label="Add recording">✎</button></div>
+                  <div id="replayStreams"></div>
+                  <p class="hint" id="replayStatus" role="status"></p>
+                </div>
+              </div>
+
+              <section class="robot-profile" aria-labelledby="robotProfileLabel">
+                <label class="selector-label" id="robotProfileLabel" for="robotProfileSelect">Robot config</label>
+                <div class="profile-selector"><select class="primary-config-control" id="robotProfileSelect" aria-label="Robot config"></select>
+                <button type="button" class="btn primary-config-control" id="profileEdit" aria-label="Edit robot config" aria-expanded="false">Edit</button></div>
+                <div id="profileEditor" class="profile-editor hidden">
+                  <div class="profile-edit-row">
+                    <input id="robotProfileName" aria-label="Profile name" maxlength="80" />
+                    <button type="button" class="btn btn-icon" id="saveProfileName" aria-label="Save name" title="Save name">✓</button>
+                    <button type="button" class="btn btn-icon" id="cancelProfileName" aria-label="Cancel rename" title="Cancel rename">↶</button>
+                    <button type="button" class="btn btn-icon" id="newRobotProfile" aria-label="New profile" title="New profile">＋</button>
+                    <button type="button" class="btn btn-icon" id="deleteRobotProfile" aria-label="Delete profile" title="Delete profile">⌫</button>
+                    <button type="button" class="btn btn-icon" id="profileDone" aria-label="Close profile editor" title="Close">×</button>
+                  </div>
+                  <p class="error hidden" id="profileError" role="alert"></p>
+                  <div id="deleteProfileConfirm" class="hidden"><span>Delete this profile?</span><button type="button" class="btn danger" id="confirmDeleteProfile">Delete profile</button></div>
+                </div>
+                <div class="selector-children">
+                  <details class="card config-card" id="locCard" aria-label="Localization">
+                    <summary class="config-summary robot-setup-field secondary-control">
+                      <span class="deps-summary-collapsed">
+                        <span class="label">Localization</span>
+                        <span class="value" id="locSummary"></span>
+                      </span>
+                    </summary>
+                    <div class="config-body settings-body">
+                      <div class="provider-list">
+                        <div class="provider">
+                          <label class="provider-toggle">
+                            <input type="checkbox" role="switch" id="fiducialEnabled" aria-controls="fiducialPanel" />
+                            <span>Fiducial marker</span>
+                            <span class="switch-track" aria-hidden="true"></span>
+                          </label>
+                          <div class="provider-fields hidden" id="fiducialPanel">
+                            <div id="tagList" class="tag-list"></div>
+                            <p id="markersEmpty" class="settings-hint hidden">No fiducial markers configured.</p>
+                            <div class="tag-actions">
+                              <button type="button" class="btn ghost" id="addTagBtn">Add marker</button>
+                              <button type="button" class="btn ghost" id="restoreTagsBtn">Restore defaults</button>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="provider">
+                          <label class="provider-toggle">
+                            <input type="checkbox" role="switch" id="vpsEnabled" aria-controls="vpsPanel" />
+                            <span>VPS</span>
+                            <span class="switch-track" aria-hidden="true"></span>
+                          </label>
+                          <div class="provider-fields hidden" id="vpsPanel">
+                            <label class="field">
+                              <span>Vendor</span>
+                              <select id="vpsVendor">
+                                <option value="multiset">MultiSet</option>
+                              </select>
+                            </label>
+                            <label class="field">
+                              <span>Map code</span>
+                              <input type="text" id="mapCode" autocomplete="off" />
+                            </label>
+                            <label class="field">
+                              <span>MultiSet client ID</span>
+                              <input type="text" id="multisetClientId" autocomplete="off" />
+                            </label>
+                            <div class="field">
+                              <label for="multisetClientSecret">MultiSet client secret</label>
+                              <div class="secret-row">
+                                <input type="password" id="multisetClientSecret" autocomplete="off" />
+                                <button type="button" class="btn ghost" id="revealMultiset" aria-label="Show MultiSet secret">
+                                  Show
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                        <details class="localization-option">
+                          <summary>
+                            <span>dimOS relocalization <span class="settings-hint">(optional)</span></span>
+                          </summary>
+                          <div class="provider-fields">
+                            <div class="field" id="nativeMapField">
+                              <label for="nativeMapFile">Prescanned LiDAR map</label>
+                              <input type="text" id="nativeMapFile" placeholder="Map name or .map.db path" autocomplete="off" />
+                            </div>
+                            <div class="settings-fields">
+                              <label class="field">
+                                <span>Minimum distance (m)</span>
+                                <input id="travel_threshold_m" type="number" required min="0.001" step="any" data-localization-policy />
+                              </label>
+                              <label class="field">
+                                <span>Minimum rotation (°)</span>
+                                <input id="heading_threshold_deg" type="number" required min="0.001" max="180" step="any" data-localization-policy />
+                              </label>
+                            </div>
+                          </div>
+                        </details>
                       </div>
-                    </label>
-                  </div>
+                    </div>
+                  </details>
+
+                  <details class="card config-card hidden" id="agentConfig">
+                    <summary class="config-summary robot-setup-field secondary-control">
+                      <span class="deps-summary-collapsed">
+                        <span class="label">Agent</span>
+                        <span class="value" id="agentSummary"></span>
+                      </span>
+                    </summary>
+                    <div class="config-body settings-body">
+                      <div class="settings-row">
+                        <label class="settings-row-label" for="apiKey">OpenAI API key</label>
+                        <div class="secret-row">
+                          <input type="password" id="apiKey" placeholder="sk-…" autocomplete="off" />
+                          <button type="button" class="btn ghost" id="revealKey" aria-label="Show API key">Show</button>
+                        </div>
+                      </div>
+                    </div>
+                  </details>
                 </div>
-              </div>
-            </details>
-
-            <details class="card config-card hidden" id="agentConfig">
-              <summary class="config-summary">
-                <span class="deps-summary-collapsed">
-                  <span class="label">Agent</span>
-                  <span class="value" id="agentSummary"></span>
-                </span>
-              </summary>
-              <div class="config-body">
-                <label class="field">
-                  <span>OPENAI_API_KEY</span>
-                  <div class="secret-row">
-                    <input
-                      type="password"
-                      id="apiKey"
-                      placeholder="sk-…"
-                      autocomplete="off"
-                    />
-                    <button
-                      type="button"
-                      class="btn ghost"
-                      id="revealKey"
-                      aria-label="Show API key"
-                    >
-                      Show
-                    </button>
-                  </div>
-                </label>
-              </div>
-            </details>
-
-            <details class="card config-card" id="logCard">
-              <summary class="config-summary">
-                <span class="deps-summary-collapsed">
-                  <span class="label">Log</span>
-                  <span class="value" id="logSummary"></span>
-                </span>
-              </summary>
-              <div class="config-body">
-                <label class="field">
-                  <span>DIMOS_LOG_LEVEL</span>
-                  <select id="logLevel" aria-label="Log level">
-                    <option value="">Loading levels…</option>
-                  </select>
-                </label>
-              </div>
-            </details>
-            <div class="selector-group">
-              <span class="selector-label">Client</span>
-              <div class="tabs" role="group" aria-label="Client">
-                <button type="button" class="tab active" data-client="webxr">WebXR</button>
-                <button type="button" class="tab" data-client="specs">Specs</button>
-              </div>
+              </section>
             </div>
 
           </section>
+          <section class="connect-section hidden" id="ipCard" aria-labelledby="connectHeading">
+            <h2 id="connectHeading">Connection status</h2>
+            <div class="connection-access">
+              <div class="status-row hidden" id="webxrNetworkRow"><span class="label">WebXR URL</span><span class="mono" id="webxrNetwork"></span>
+                <button type="button" class="btn ghost hidden" id="startWebxr">Start WebXR</button>
+              </div>
+              <div class="status-row hidden" id="pinRow"><span class="label">PIN</span><strong class="mono" id="pinSummary"></strong></div>
+            </div>
+            <p class="error hidden" role="alert" id="webxrStartError"></p>
+            <div class="status-row hidden" id="hostIpRow"><span class="label">Host IP</span><span class="value mono" id="hostIp"></span></div>
+            <ul class="connection-list" id="connectionList" aria-label="Connected robots and clients"></ul>
+            <p class="hint" id="connectionsEmpty">Waiting for connections</p>
+          </section>
+
+
         </div>
-
-
+        <footer class="panel-bottom" id="actionsBar">
+          <p class="error hidden" id="startError" role="alert"></p>
+          <div class="actions">
+            <button type="button" class="btn btn-icon" id="stopBtn" aria-label="Stop blueprint" title="Stop blueprint">
+              <span class="stop-icon" aria-hidden="true"></span>
+            </button>
+            <button type="button" class="btn primary" id="startBtn">Run blueprint</button>
+            <div id="actionStatus" class="action-status hidden">
+              <span id="actionNote" role="status"></span>
+              <span id="actionElapsed" class="mono" aria-label="Elapsed time"></span>
+            </div>
+          </div>
+        </footer>
       </aside>
 
       <div
-        class="splitter"
+        class="splitter hidden"
         id="splitter"
         role="separator"
         aria-orientation="vertical"
-        aria-label="Resize panels"
+        aria-label="Resize logs"
         tabindex="0"
       ></div>
 
-      <main class="log-panel">
+      <main class="log-panel hidden" id="logPanel" aria-label="Logs">
         <header class="log-header">
           <h2>Log</h2>
           <div class="log-actions">
+            <svg class="log-filter-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3h12L9 9v4l-2 1V9z" fill="none" stroke="currentColor" stroke-linejoin="round"/></svg>
             <select id="logFilterLevel" aria-label="Filter log by level">
               <option value="debug">All levels</option>
               <option value="info">Info+</option>
@@ -347,6 +305,6 @@
         <pre class="log" id="log" aria-live="polite"></pre>
       </main>
     </div>
-    <script type="module" src="/static/app.js?v=launcher-controls-12"></script>
+    <script type="module" src="/static/app.js?v=launcher-review"></script>
   </body>
 </html>

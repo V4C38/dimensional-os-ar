@@ -15,7 +15,6 @@ from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 def test_native_placement_waits_for_odometry_and_consumes_unchanged_fix() -> None:
     module = object.__new__(ARModule)
     module._odometry = RobotOdometry()
-    module._requires_mapping_restart = False
     localization = Mock()
     localization.on_native_reference.return_value = False
     module._localization = localization
@@ -29,7 +28,3 @@ def test_native_placement_waits_for_odometry_and_consumes_unchanged_fix() -> Non
     localization.on_native_reference.assert_called_once_with(
         sample.T_native_odom, ts_server=10.0, native_map_id="saved-map"
     )
-
-    module._requires_mapping_restart = True
-    assert module._accept_native_map(sample) is False
-    assert localization.on_native_reference.call_count == 1

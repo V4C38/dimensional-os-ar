@@ -16,6 +16,7 @@ from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver, PoseTargetI
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.manipulation.manipulation_spec import (
     CommandResult,
+    CommandStatus,
     ExecutionResult,
     ExecutionStatus,
     ManipulationSnapshot,
@@ -58,7 +59,7 @@ class DimOSManipulationAdapter:
         self.module = module
         self.config: ARManipulationModuleConfig = module.config
         self.feedback: JointState | None = None
-        self.gripper: float | None = None
+        self.gripper_positions: dict[str, float | None] = {}
         self.gripper_target: float | None = None
         self.following_status: dict[str, Any] = {}
         self.following_status_at = 0.0
@@ -165,7 +166,10 @@ class DimOSManipulationAdapter:
         self.endpoint_holding = bool(
             self.task_invoke("joint_trajectory", "get_endpoint_status").get("holding_endpoint")
         )
-        self.gripper = self.module._get_group_gripper_position()
+        self.gripper_positions = {
+            group.id: self.module._get_group_gripper_position(group)
+            for group in self.module._world_monitor.planning_groups.list()
+        }
 
     @staticmethod
     def check_compatibility() -> None:
@@ -203,7 +207,7 @@ class DimOSManipulationAdapter:
             timestamp=time.time(),
             operation_status=OperationStatus[self.module._state.name],
             error=self.module._error_message or None,
-            has_pending_plan=self.module._last_plan is not None,
+            has_pending_plan=self.module.has_planned_path(),
             execution_status=self.module._execution_manager.status,
             groups={
                 g.id: PlanningGroupState(
@@ -221,7 +225,7 @@ class DimOSManipulationAdapter:
                     if feedback
                     else None,
                     end_effector_pose=poses.get(g.tip_frame),
-                    gripper_position=self.gripper,
+                    gripper_position=self.gripper_positions.get(g.id),
                 )
                 for g in groups
             },
@@ -288,7 +292,17 @@ class DimOSManipulationAdapter:
             # Publish recovery before runtime clears its stopped flag. Serialize
             # with polling so an older paused response cannot relatch the stop.
             self.protection = self.module._control_coordinator.protection_status()
-        return cast("CommandResult", self.module.reset())
+        # DimOS main returns to IDLE on a confirmed cancel. Its EXECUTING state
+        # stays latched for uncertain outcomes, including a cancellation timeout.
+        stopped = self.cancel()
+        confirmed = stopped.status in {
+            ExecutionStatus.IDLE,
+            ExecutionStatus.NO_EXECUTION,
+            ExecutionStatus.COMPLETED,
+            ExecutionStatus.ABORTED,
+        }
+        status = CommandStatus.SUCCEEDED if confirmed else CommandStatus.FAILED
+        return CommandResult(status, stopped.message)
 
     def execute(self, *, blocking: bool, plan_id: str) -> ExecutionResult:
         if self._plan_scene is None or self._plan_scene != self.scene_snapshot():
@@ -312,7 +326,11 @@ class DimOSManipulationAdapter:
         return result
 
     def endpoint_pose(self, group: str, joints: dict[str, float]) -> PoseStamped:
-        state = JointState(name=list(joints), position=list(joints.values()))
+        if self.feedback is None:
+            raise ManipulationError("stale_feedback", "Cannot project an endpoint without model state")
+        values = dict(zip(self.feedback.name, self.feedback.position, strict=True))
+        values.update(joints)
+        state = JointState(name=list(values), position=list(values.values()))
         return cast("PoseStamped", self.module._world_monitor.get_group_ee_pose(group, state))
 
     def plan_to_joints(self, joints: dict[str, JointState], *, speed_scale: float) -> PlanResult:
@@ -322,17 +340,33 @@ class DimOSManipulationAdapter:
         generation = self._planning_generation
         worker = self._get_worker(advisory=False)
         scene = self.scene_snapshot()
-        result = worker.call(
-            action, self.feedback, targets, speed_scale=speed_scale, scene=scene
-        )
-        if not isinstance(result, PlanResult):
-            raise TypeError("Planning worker returned an invalid plan result")
-        with self.module._lock:
-            if self._workers_closed or generation != self._planning_generation or scene != self.scene_snapshot():
-                raise ManipulationError("retired", "Planning result retired")
-            if result.succeeded:
-                self.module._last_plan = result.plan
-                self._plan_scene = scene
+        with self.module._command_lock:
+            epoch = self.module._begin(OperationStatus.PLANNING)
+        if epoch is None:
+            raise ManipulationError("busy", "The native planner cannot accept another request")
+        try:
+            result = worker.call(
+                action, self.feedback, targets, speed_scale=speed_scale, scene=scene
+            )
+            if not isinstance(result, PlanResult):
+                raise TypeError("Planning worker returned an invalid plan result")
+            with self.module._command_lock:
+                if (
+                    self._workers_closed
+                    or generation != self._planning_generation
+                    or scene != self.scene_snapshot()
+                    or not self.module._finish(
+                        epoch,
+                        message="" if result.succeeded else result.message,
+                        plan=result.plan if result.succeeded else None,
+                    )
+                ):
+                    raise ManipulationError("retired", "Planning result retired")
+                if result.succeeded:
+                    self._plan_scene = scene
+        except Exception as exc:
+            self.module._finish(epoch, message=str(exc))
+            raise
         return result
 
     def list_planning_groups(self) -> tuple[PlanningGroupInfo, ...]:

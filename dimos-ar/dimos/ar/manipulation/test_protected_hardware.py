@@ -1,122 +1,136 @@
-"""Motor-command boundary tests use fake IO; no buses or motors are opened."""
+"""Exercise the native connection's command boundary with a fake Damiao arm."""
 
-import time
+import math
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
 pytest.importorskip("can_motor_control")
-from dimos.ar.manipulation.protected_hardware import ProtectedOpenYamAdapter
-from dimos.ar.manipulation.protection import MotorProtection
-from dimos.hardware.whole_body.openyam_damiao.adapter import OpenYamDamiaoAdapter
-from dimos.hardware.whole_body.spec import MotorCommand
+from dimos.ar.manipulation.model_config import COMMAND_TRACKING_LEAD_RAD
+from dimos.ar.manipulation.protected_hardware import ProtectedOpenYamConnection
+from dimos.robot.manipulators.damiao.arm import ArmReading
 
 
-def adapter(monkeypatch):
-    device = object.__new__(ProtectedOpenYamAdapter)
-    device.safety_limits = {name: [-1.0, 1.0] for name in device.kinematic_joint_names}
-    device.last_write = None
-    device.last_diagnostic_at = 0.0
-    device.velocity = {}
-    device.guard = MotorProtection()
-    device.commands = {}
-    device.latest = [SimpleNamespace(q=0.0) for _ in range(7)]
-    device.latest_at = time.monotonic()
-    device.last_motor_commands = None
-    device.stop_latched = False
-    device.stop_commands = None
-    sent = []
-    monkeypatch.setattr(
-        OpenYamDamiaoAdapter,
-        "write_motor_commands",
-        lambda self, commands: sent.append(commands) or True,
+@pytest.fixture
+def device(request):
+    names = ProtectedOpenYamConnection.robot.arm_joint_names
+    connection = ProtectedOpenYamConnection(
+        source="arm", can_port="test", safety_limits={n: [-1, 1] for n in names}
     )
-    return device, sent
+    # The connection is constructed normally; only hardware IO is substituted.
+    reading = ArmReading([0.0] * 7, [0.0] * 7, [0.0] * 7)
+    motors = {
+        n: SimpleNamespace(temperature_mos=28, temperature_rotor=31, fault=0, is_enabled=True)
+        for n in names
+    }
+    connection._arm = SimpleNamespace(
+        active=True,
+        _arms={"arm": motors},
+        read=Mock(return_value=reading),
+        command=Mock(),
+        disable=Mock(),
+        hold=Mock(),
+    )
+    request.addfinalizer(connection.stop)
+    connection._connected = True
+    connection._read_state()
+    return connection, reading, connection._arm
 
 
-def test_motor_boundary_bounds_outward_commands_without_connecting(monkeypatch):
-    device, sent = adapter(monkeypatch)
+def test_motor_boundary_limits_outward_commands(device, monkeypatch):
+    arm, reading, native = device
     now = [0.0]
     monkeypatch.setattr("dimos.ar.manipulation.protected_hardware.time.monotonic", lambda: now[0])
     for _ in range(300):
-        assert device.write_motor_commands([MotorCommand(q=10.0) for _ in range(7)])
-        for i, command in enumerate(sent[-1][:6]):
-            assert -1 <= command.q <= 1
-            assert abs(command.q - device.latest[i].q) <= 0.010001
-            device.latest[i].q = command.q
+        arm.write({"arm/yam_joint1/position": 10})
+        value = native.command.call_args.args[0]["yam_joint1"]
+        assert abs(value - reading.position[0]) <= 0.010001
+        assert value <= 1
+        reading.position[0] = value
+        arm._read_state()
         now[0] += 0.01
-    assert sent[-1][0].q == 1
+    assert value == 1.0
 
 
-def test_pause_holds_measurements_and_fault_rejects_writes(monkeypatch):
-    device, sent = adapter(monkeypatch)
-    device.guard.state = "paused"
-    assert device.write_motor_commands([MotorCommand(q=0.5) for _ in range(7)])
-    assert all(c.q == 0 for c in sent[-1])
-    device.guard.state = "fault"
-    assert not device.write_motor_commands([MotorCommand(q=0.5) for _ in range(7)])
-    assert len(sent) == 1
-
-
-def test_emergency_hold_does_not_push_a_valid_pose_into_the_margin(monkeypatch):
-    device, sent = adapter(monkeypatch)
-    device.safety_limits = {name: [0.05236, 1.0] for name in device.kinematic_joint_names}
-    for state in device.latest:
-        state.q = 0.0078
-    device.last_motor_commands = [MotorCommand(q=0.5) for _ in range(7)]
-    assert device.hold_current()
-    assert all(command.q == 0.0078 for command in sent[-1])
-    assert device.write_motor_commands([MotorCommand(q=0.8) for _ in range(7)])
-    assert all(command.q == 0.0078 for command in sent[-1])
-    assert device.stop_latched
-
-
-def test_stop_refreshes_stale_feedback_before_holding(monkeypatch):
-    device, sent = adapter(monkeypatch)
-    device.latest_at = time.monotonic() - 1
-    fresh = [SimpleNamespace(q=0.2) for _ in range(7)]
-    monkeypatch.setattr(OpenYamDamiaoAdapter, "read_motor_states", lambda self: fresh)
-    assert device.hold_current()
-    assert all(command.q == 0.2 for command in sent[-1])
-    device.release_hold()
-    assert not device.stop_latched
-    assert device.stop_commands is None
-    assert all(value == 0.2 for value in device.commands.values())
-
-
-def test_loaded_arm_can_overcome_five_degree_tracking_offset(monkeypatch):
-    import math
-
-    from dimos.ar.manipulation.model_config import COMMAND_TRACKING_LEAD_RAD
-
-    device, sent = adapter(monkeypatch)
+def test_loaded_arm_can_overcome_five_degree_tracking_offset(device, monkeypatch):
+    arm, reading, native = device
     now = [0.0]
     moving = False
     monkeypatch.setattr("dimos.ar.manipulation.protected_hardware.time.monotonic", lambda: now[0])
     for _ in range(500):
-        assert device.write_motor_commands([MotorCommand(q=0.6) for _ in range(7)])
-        command = sent[-1][0].q
-        error = command - device.latest[0].q
+        arm.write({"arm/yam_joint1/position": 0.6})
+        value = native.command.call_args.args[0]["yam_joint1"]
+        error = value - reading.position[0]
         assert abs(error) <= COMMAND_TRACKING_LEAD_RAD + 1e-9
         moving |= error > math.radians(6)
         if moving:
-            for state in device.latest:
-                state.q += max(-0.01, min(0.01, command - state.q))
+            reading.position[0] += max(-0.01, min(0.01, error))
+        arm._read_state()
         now[0] += 0.01
     assert moving
-    assert abs(device.latest[0].q - 0.6) < 0.001
+    assert abs(reading.position[0] - 0.6) < 0.001
 
 
-def test_can_transport_failure_is_a_connection_fault_and_blocks_writes(monkeypatch):
-    device, sent = adapter(monkeypatch)
+def test_measured_hold_includes_jaw_and_stays_at_first_reading(device):
+    arm, reading, native = device
+    reading.position[:] = [1.02] * 6 + [0.002]
+    assert arm.ar_arm_hold(True)
+    assert native.command.call_args.args[0] == dict(
+        zip(arm.joint_names, reading.position, strict=True)
+    )
+    reading.position[0] = 1.03
+    arm._read_state()
+    arm.write({"arm/yam_joint1/position": 0.0})
+    assert native.command.call_args.args[0]["yam_joint1"] == 1.02
+    assert arm.ar_arm_hold(False)
+    assert arm._hold_positions is None
+    arm.write({"arm/yam_joint1/position": 0.2})
+    assert native.command.call_args.args[0]["yam_joint1"] < 1.03
 
-    def disconnected(_):
-        raise OSError("send buffer full after retries")
 
-    monkeypatch.setattr(OpenYamDamiaoAdapter, "read_motor_states", disconnected)
+def test_hot_motor_holds_then_requires_recovery_and_release(device, monkeypatch):
+    arm, reading, native = device
+    now = [1.0]
+    monkeypatch.setattr("dimos.ar.manipulation.protected_hardware.time.monotonic", lambda: now[0])
+    native._arms["arm"]["yam_joint1"].temperature_mos = 75
+    arm._read_state()
+    assert arm.ar_motor_protection()["state"] == "paused"
+    assert not arm.ar_arm_hold(False)
+    assert not arm.ar_resume_motor_protection()
+    native._arms["arm"]["yam_joint1"].temperature_mos = 28
+    arm._read_state()
+    now[0] += 3
+    arm._read_state()
+    assert arm.ar_resume_motor_protection()
+    assert arm.ar_arm_hold(False)
+
+
+def test_can_read_failure_latches_fault_and_blocks_writes(device):
+    arm, _, native = device
+    native.read.side_effect = OSError("send buffer full")
     with pytest.raises(OSError):
-        device.read_motor_states()
-    assert device.guard.state == "fault"
-    assert "CAN connection error" in device.guard.reason
-    assert not device.write_motor_commands([MotorCommand(q=0.5) for _ in range(7)])
-    assert not sent
+        arm._read_state()
+    assert arm.ar_motor_protection()["state"] == "fault"
+    native.disable.assert_called_once()
+    with pytest.raises(RuntimeError, match="send buffer full"):
+        arm.write({"arm/yam_joint1/position": 0.4})
+    native.command.assert_not_called()
+    assert not arm.ar_arm_hold(True)
+    assert not arm.ar_resume_motor_protection()
+
+
+def test_queued_position_batch_from_before_resume_cannot_move_arm(device, monkeypatch):
+    from dimos.msgs.sensor_msgs.JointState import JointState
+
+    arm, _, native = device
+    clock = [100.0]
+    monkeypatch.setattr("dimos.ar.manipulation.protected_hardware.time.time", lambda: clock[0])
+    assert arm.ar_arm_hold(True)
+    clock[0] = 101.0
+    assert arm.ar_arm_hold(False)
+    native.command.reset_mock()
+    arm._on_position(JointState(ts=100.5, name=["arm/yam_joint1"], position=[0.1]))
+    native.command.assert_not_called()
+    arm._on_position(JointState(ts=101.1, name=["arm/yam_joint1"], position=[0.1]))
+    native.command.assert_called_once()

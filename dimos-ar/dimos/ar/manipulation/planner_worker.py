@@ -101,7 +101,6 @@ def main(fd: int) -> None:
     from dimos.manipulation.manipulation_module import (
         ManipulationModule,
         ManipulationModuleConfig,
-        ManipulationState,
     )
     from dimos.manipulation.planning.factory import create_planning_specs, create_world
     from dimos.manipulation.visualization.operator import ManipulationOperator, PoseTargetRequest
@@ -131,6 +130,8 @@ def main(fd: int) -> None:
         module._trajectory_parametrizer = specs.trajectory_parametrizer
         module._world_monitor.load_model(config.model)
         module._world_monitor.finalize()
+        # This process provides planning only. The live module owns execution.
+        module._started = True
         send(channel, True)
         previous_solutions: dict[str, Any] = {}
         previous_context: Any = None
@@ -148,7 +149,6 @@ def main(fd: int) -> None:
                     previous_scene = scene
                     previous_solutions.clear()
                 world.sync_from_joint_state(feedback)
-                module._state = ManipulationState.IDLE
                 if action == "evaluate":
                     group, pose = args
                     context = kwargs.pop("seed_context", None)
@@ -159,7 +159,7 @@ def main(fd: int) -> None:
                         module, module._world_monitor
                     ).evaluate_pose_target(
                         PoseTargetRequest(
-                            {group: pose}, seed=previous_solutions.get(group, feedback)
+                            {group: pose}, seed=previous_solutions.get(group)
                         )
                     )
                     if result.success and result.target_joints is not None:

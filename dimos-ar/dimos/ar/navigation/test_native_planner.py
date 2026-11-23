@@ -10,6 +10,7 @@ from dimos.ar.navigation.native_planner import ARGlobalPlanner
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.navigation.base import NavigationState
 from dimos.navigation.go2.replanning_a_star.global_planner import GlobalPlanner
+from test_support.module import MockRPC
 
 
 def test_terminal_carries_goal_identity_captured_at_native_origin():
@@ -168,13 +169,16 @@ def test_failed_zero_publication_does_not_skip_native_cancellation():
 def test_native_adapter_constructs_with_installed_planner_configuration():
     from dimos.ar.navigation.native_planner import ARReplanningAStarPlanner
 
-    module = ARReplanningAStarPlanner(robot_width=0.73)
-    assert isinstance(module._planner, ARGlobalPlanner)
-    assert module.config.robot_width == 0.73
-    assert module.nav_cmd_vel._fence is module._ar_fence
-    config = getattr(module._planner, "_global_config", None)
-    if config is not None:
-        assert config.robot_width == 0.73
+    module = ARReplanningAStarPlanner(
+        robot_width=0.73, robot_rotation_diameter=1.1, rpc_transport=MockRPC
+    )
+    try:
+        assert isinstance(module._planner, ARGlobalPlanner)
+        assert module.nav_cmd_vel._fence is module._ar_fence
+        assert module._planner._navigation_map._robot_width == 0.73
+        assert module._planner._robot_rotation_diameter == 1.1
+    finally:
+        module.stop()
 
 
 def test_recovery_requires_an_available_planner_and_confirmed_empty_goal():

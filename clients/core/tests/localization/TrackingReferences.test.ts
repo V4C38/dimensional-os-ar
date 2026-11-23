@@ -105,7 +105,7 @@ it("accepts telemetry notices only for the current frame and native source", () 
   const f = ready(), status = { ...context, type: "localization_status", scope: "robot", status: "deferred", reason: "robot_pose_unavailable" };
   f.receive({ ...status, reason: "robot_pose_available", odom_reference_id: "old" });
   expect(f.session.view().robotTelemetry).toBe("waiting");
-  f.receive(status); expect(f.session.view().robotTelemetry).toBe("waiting");
+  f.receive(status); expect(f.session.view().robotTelemetry).toBe("unavailable");
   f.receive({ ...status, reason: "robot_pose_available" });
   expect(f.session.view().robotTelemetry).toBe("available");
   f.receive({ ...context, revision: 1, reset: true });
@@ -123,4 +123,46 @@ it("preserves connected frame context and same-tracking baseline through a UI cl
   store.clear(); expect(store.hasTrackingOrigin).toBe(false); expect(store.acceptsContext(context)).toBe(true);
   store.restore(baseline); expect(store.T_map_tracking).toEqual(baseline);
   store.resetContext(); expect(store.sharedFrameContext).toBeNull();
+});
+
+it("keeps the last pose through an outage and rejects queued poses from its retired source", () => {
+  const f = ready();
+  const state = {
+    type: "state", server: { connected_clients: 1 },
+    lidar: { enabled: false, min_height_m: 0, max_height_m: 1, max_range_m: 5 },
+    nav: { state: "idle", outcome: null }, agent: { idle: true },
+  };
+  const pose = { type: "pose", shared_frame_id: "office", orientation: identity };
+  f.receive({ ...state, robot_link: { status: "online", source_generation: 0, motion_ready: true, reason: null } });
+  f.receive({ ...pose, position: [1, 0, 0], ts: 101, source_generation: 0 });
+  f.session.tick();
+  expect(f.session.view().pose?.position).toEqual([1, 0, 0]);
+  f.receive({ ...state, robot_link: { status: "offline", source_generation: 1, motion_ready: false, reason: "odometry_stale" } });
+  f.receive({ ...pose, position: [2, 0, 0], ts: 102, source_generation: 0 });
+  f.session.tick();
+  expect(f.session.view().robotTelemetry).toBe("unavailable");
+  expect(f.session.view().pose?.position).toEqual([1, 0, 0]);
+  f.receive({ ...state, robot_link: { status: "online", source_generation: 1, motion_ready: true, reason: null } });
+  f.receive({ ...pose, position: [3, 0, 0], ts: 103, source_generation: 1 });
+  f.session.tick();
+  expect(f.session.view().pose?.position).toEqual([3, 0, 0]);
+});
+
+it("stores a private sighting only for the current capture and tracking reference", () => {
+  const f = ready();
+  f.submit("robot");
+  const base_sighting = { position: [5, 0, 0], orientation: identity, ts: 100.95, tracking_reference_id: "tracking" };
+  const status = { ...context, type: "localization_status", scope: "robot", status: "deferred",
+    reason: "capture_pose_unavailable", episode_id: "robot", ts: 101, base_sighting };
+  f.receive({ ...status, episode_id: "other" });
+  expect(f.session.view().baseSighting).toBeNull();
+  f.receive(status);
+  expect(f.session.view().baseSighting).toEqual(base_sighting);
+  expect(f.session.view().hasTrackingOrigin).toBe(false);
+  expect(f.session.view().pose).toBeNull();
+  f.origins.beginTrackingReference("new-tracking");
+  expect(f.session.view().baseSighting).toBeNull();
+  f.submit("robot", 2);
+  f.receive({ ...status, ts: 102 });
+  expect(f.session.view().baseSighting).toBeNull();
 });

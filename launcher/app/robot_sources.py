@@ -110,7 +110,7 @@ def resolve_robot_source(
     devices = devices or []
     if source.mode in {"auto", "device"}:
         choices = devices if source.mode == "auto" else [d for d in devices if d["id"] == source.device_id]
-        if len(choices) != 1:
+        if not choices or (len(choices) != 1 and (robot != "openyam" or source.mode != "auto")):
             raise SourceSelectionRequired(choices, automatic=source.mode == "auto")
         address = choices[0]["address"]
         return ResolvedRobotSource(can_port=address) if robot == "openyam" else ResolvedRobotSource(robot_ip=address)

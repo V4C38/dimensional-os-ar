@@ -42,6 +42,8 @@ GitHub Actions must use the same gate with job selectors, sharing installation, 
 
 Import installed DimOS; do not edit upstream source. Reuse ClientCore without copying it or adding platform APIs. Change `dimos-ar/PROTOCOL.md`, Python `websocket/protocol.py`, and Core `clients/core/src/websocket/protocol.ts` together. Manipulate Lens `.scene` files through Lens Studio MCP tools rather than hand editing.
 
+Stay within the requested behavior. Reuse supported DimOS interfaces and existing flows, with one owner per concern. Add safeguards, blocking states, restart requirements, or fallbacks only when explicitly requested or required by a concrete dependency. Never fabricate data or silently switch modes. AR localization is advisory and must never gate native navigation. Ship backend and clients as one version. Do not add backward compatibility, legacy protocol branches, or mixed-version support.
+
 ## Lens Studio and Core changes
 
 Before preparing any Lens Studio verification or editor action, including work triggered outside Specs, read and follow [Specs instructions](clients/specs/AGENTS.md). Acquire its idle-lock guard immediately when LS work is requested, before preparation, implementation, other tests, or waiting for an editor.

@@ -56,7 +56,7 @@ def test_execution_clock_and_status_share_derating_and_pause(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from dimos.ar.manipulation.protection import create_trajectory_task
+    from dimos.ar.manipulation.protection import apply_trajectory_protection, create_trajectory_task
     from dimos.control.task import CoordinatorState, JointStateSnapshot
     from dimos.control.tasks.trajectory_task import trajectory_task
 
@@ -71,9 +71,7 @@ def test_execution_clock_and_status_share_derating_and_pause(monkeypatch):
     )
     monkeypatch.setattr(trajectory_task, "create_task", lambda *_: native)
     guard = MotorProtection()
-    task = create_trajectory_task(
-        None, {"arm": SimpleNamespace(_wb_adapter=SimpleNamespace(guard=guard))}
-    )
+    task = apply_trajectory_protection(create_trajectory_task(None, {}), guard)
     task.compute(CoordinatorState(joints=JointStateSnapshot(), t_now=10, dt=0.01))
     first = compute.call_args.args[0].t_now
     guard.state = "derated"
@@ -106,7 +104,7 @@ def test_trajectory_keeps_final_command_until_measured_arrival(monkeypatch):
     from types import SimpleNamespace
     from unittest.mock import Mock
 
-    from dimos.ar.manipulation.protection import create_trajectory_task
+    from dimos.ar.manipulation.protection import apply_trajectory_protection, create_trajectory_task
     from dimos.control.task import CoordinatorState, JointCommandOutput, JointStateSnapshot
     from dimos.control.tasks.trajectory_task import trajectory_task
     from dimos.msgs.trajectory_msgs.TrajectoryStatus import (
@@ -128,9 +126,7 @@ def test_trajectory_keeps_final_command_until_measured_arrival(monkeypatch):
     )
     monkeypatch.setattr(trajectory_task, "create_task", lambda *_: native)
     guard = MotorProtection()
-    task = create_trajectory_task(
-        None, {"arm": SimpleNamespace(_wb_adapter=SimpleNamespace(guard=guard))}
-    )
+    task = apply_trajectory_protection(create_trajectory_task(None, {}), guard)
 
     def tick(now, position):
         return task.compute(
@@ -171,7 +167,7 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
     from unittest.mock import Mock
 
     from dimos.ar.manipulation.operation import ActiveOperation, ManipulationOperation
-    from dimos.ar.manipulation.protection import create_trajectory_task
+    from dimos.ar.manipulation.protection import apply_trajectory_protection, create_trajectory_task
     from dimos.control.coordinator import TaskConfig
     from dimos.control.task import CoordinatorState, JointStateSnapshot
     from dimos.msgs.sensor_msgs.JointState import JointState
@@ -187,8 +183,9 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
             joint_names=["j"],
             params={"velocity_limits": {"j": 1.0}},
         ),
-        {"arm": SimpleNamespace(_wb_adapter=SimpleNamespace(guard=guard))},
+        {},
     )
+    apply_trajectory_protection(task, guard)
     trajectory = JointTrajectory(
         joint_names=["j"],
         points=[
@@ -255,11 +252,10 @@ def test_real_trajectory_status_survives_rpc_and_applies_deferred_gripper_after_
 
 @pytest.mark.parametrize("protected", [False, True])
 def test_endpoint_poll_is_declared_and_quiet_for_real_and_simulated_tasks(monkeypatch, protected):
-    from types import SimpleNamespace
     from unittest.mock import Mock
 
     from dimos.ar.manipulation import following
-    from dimos.ar.manipulation.protection import create_trajectory_task
+    from dimos.ar.manipulation.protection import apply_trajectory_protection, create_trajectory_task
     import dimos.control.coordinator as coordinator_module
     from dimos.control.coordinator import TaskConfig
     import dimos.control.tasks.registry as registry_module
@@ -268,7 +264,7 @@ def test_endpoint_poll_is_declared_and_quiet_for_real_and_simulated_tasks(monkey
     registry = ControlTaskRegistry()
     monkeypatch.setattr(following, "control_task_registry", registry)
     monkeypatch.setattr(registry_module, "control_task_registry", registry)
-    monkeypatch.setattr(following.ArmPoseCoordinator, "build", lambda _: None)
+    monkeypatch.setattr(following.OpenYamCoordinator, "build", lambda _: None)
     warning = Mock()
     monkeypatch.setattr(coordinator_module.logger, "warning", warning)
     coordinator = following.ARManipulationCoordinator(publish_joint_state=False)
@@ -276,10 +272,10 @@ def test_endpoint_poll_is_declared_and_quiet_for_real_and_simulated_tasks(monkey
         coordinator.build()
         task = create_trajectory_task(
             TaskConfig(name="joint_trajectory", type="ar_joint_trajectory", joint_names=["j"]),
-            {"arm": SimpleNamespace(_wb_adapter=SimpleNamespace(guard=MotorProtection()))}
-            if protected
-            else {},
+            {},
         )
+        if protected:
+            apply_trajectory_protection(task, MotorProtection())
         coordinator.add_task(task, task_type="ar_joint_trajectory")
         for _ in range(100):
             assert coordinator.task_invoke("joint_trajectory", "get_endpoint_status") == {
@@ -289,3 +285,25 @@ def test_endpoint_poll_is_declared_and_quiet_for_real_and_simulated_tasks(monkey
         warning.assert_not_called()
     finally:
         coordinator.stop()
+
+
+def test_coordinator_waits_for_physical_hold_and_release_acknowledgements(monkeypatch, request):
+    from unittest.mock import Mock
+
+    from dimos.ar.manipulation.following import ARManipulationCoordinator, OpenYamCoordinator
+
+    events = []
+    coordinator = ARManipulationCoordinator(require_motor_protection=True)
+    request.addfinalizer(coordinator.stop)
+    monkeypatch.setattr(
+        OpenYamCoordinator, "set_estop", lambda _, value: events.append(("tasks", value)) or True
+    )
+    port = coordinator._motor_protection = Mock()
+    port.ar_arm_hold.side_effect = lambda value: events.append(("hardware", value)) or True
+    assert coordinator.set_estop(True)
+    assert coordinator.set_estop(False)
+    assert events == [("tasks", True), ("hardware", True), ("hardware", False), ("tasks", False)]
+    port.ar_arm_hold.side_effect = lambda value: events.append(("hardware", value)) or False
+    assert not coordinator.set_estop(True)
+    assert not coordinator.set_estop(False)
+    assert events[-3:] == [("tasks", True), ("hardware", True), ("hardware", False)]

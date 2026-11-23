@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from importlib.util import find_spec
-import shutil
 from typing import Any
 
 from dimos.ar.async_execution import BoundedWorker
@@ -36,9 +35,7 @@ class LocalSpeechTranscriber:
     def availability_error(self) -> str | None:
         if self._transcribe is not None:
             return None
-        if shutil.which("ffmpeg") is None:
-            return "Install ffmpeg on the DimOS server, then reconnect to use local dictation."
-        if any(find_spec(module) is None for module in ("ffmpeg", "soundfile")):
+        if find_spec("av") is None:
             return "Local dictation audio dependencies are missing. Reinstall dimos-ar in the selected DimOS environment, then reconnect."
         if find_spec("faster_whisper") is None and find_spec("whisper") is None:
             return "Local dictation needs dimos-ar[speech] in the selected DimOS environment. Install the speech extra, then reconnect."
@@ -48,12 +45,9 @@ class LocalSpeechTranscriber:
         # These are the same decoder and normalize -> Whisper chain used by
         # installed DimOS VoiceInput. Never publish to its human_input stream:
         # only the client can submit the returned draft with explicit Send.
-        from dimos.stream.audio.decode import decode_audio_bytes, ffmpeg_requirement
+        from dimos.stream.audio.decode import decode_audio_bytes
         from dimos.stream.audio.pipeline import whisper_pipeline
 
-        requirement = ffmpeg_requirement()
-        if requirement:
-            raise RuntimeError(requirement)
         audio = decode_audio_bytes(recording)
         if audio is None:
             raise ValueError("The recording could not be decoded. Try recording again.")

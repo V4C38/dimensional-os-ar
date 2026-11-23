@@ -4,23 +4,35 @@ from __future__ import annotations
 
 import copy
 import json
-import os
 import re
-import tempfile
 import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from config import replace_private_file
 from dimos_config import dimos_config_path
 from robot_sources import BLUEPRINTS, blueprint_definition
-from tag_config import merge_armodule_settings
+from tag_config import DEFAULT_MOUNT, merge_armodule_settings, ui_from_armodule_config
 
 _LOCK = threading.RLock()
 
 
 def profiles_path() -> Path:
     return dimos_config_path().with_name("ar-profiles.json")
+
+
+def robot_preset(robot: str) -> dict[str, Any]:
+    if robot == "openyam":
+        path = Path(__file__).with_name("profiles") / "openyam.json"
+        return dict(json.loads(path.read_text(encoding="utf-8"))["armodule"])
+    return {}
+
+
+def default_mount(robot: str) -> dict[str, Any]:
+    return ui_from_armodule_config(robot_preset(robot))["mounts"][0] if robot == "openyam" else dict(DEFAULT_MOUNT)
 
 
 class RobotProfiles:
@@ -67,10 +79,7 @@ class RobotProfiles:
                 self._missing()
             if source is not None and source["robot"] != robot:
                 raise ValueError("cannot duplicate a different robot type")
-            config = source["armodule"] if source else {}
-            if robot == "openyam" and not source_id:
-                preset = Path(__file__).with_name("profiles") / "openyam.json"
-                config = json.loads(preset.read_text(encoding="utf-8"))["armodule"]
+            config = source["armodule"] if source else robot_preset(robot)
             if name is None:
                 stem = source["name"] if source else ("UnitreeGo2" if robot == "unitree_go2" else "OpenYAM")
                 name = self._next_name(stem, profiles)
@@ -99,7 +108,9 @@ class RobotProfiles:
             if name is not None:
                 profile["name"] = self._name(name)
             if settings is not None:
-                config = merge_armodule_settings(profile["armodule"], settings)
+                config = merge_armodule_settings(
+                    profile["armodule"], settings, default_mount=default_mount(profile["robot"])
+                )
                 self._validate_native_map(profile["robot"], config)
                 profile["armodule"] = config
             self._save(profiles)
@@ -116,10 +127,16 @@ class RobotProfiles:
         if blueprint_definition(blueprint).robot != profile["robot"]:
             raise ValueError("robot profile is incompatible with blueprint")
         self._validate_native_map(profile["robot"], profile["armodule"])
-        return {
-            **copy.deepcopy(profile["armodule"]),
-            "robot_display_name": profile["name"],
-        }
+        config = copy.deepcopy(profile["armodule"])
+        if config.get("fiducial_marker_mounts") == []:
+            config.pop("fiducial_marker_mounts")
+            localization = config.get("localization")
+            if localization is not None:
+                localization["providers"] = [
+                    provider for provider in localization.get("providers", [])
+                    if provider.get("type") != "fiducial_marker"
+                ]
+        return {**config, "robot_display_name": profile["name"]}
 
     @staticmethod
     def _validate_native_map(robot: str, config: dict[str, Any]) -> None:
@@ -139,12 +156,19 @@ class RobotProfiles:
             raise ValueError("profile name must contain 1 to 80 characters")
         return name.strip()
 
+    @contextmanager
+    def rollback_on_error(self) -> Iterator[None]:
+        with _LOCK:
+            previous = self.path.read_bytes() if self.path.exists() else None
+            try:
+                yield
+            except BaseException:
+                if previous is None:
+                    self.path.unlink(missing_ok=True)
+                elif not self.path.exists() or self.path.read_bytes() != previous:
+                    replace_private_file(self.path, previous)
+                raise
+
     def _save(self, profiles: list[dict[str, Any]]) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(dir=self.path.parent, prefix=".ar-profiles-")
-        try:
-            with os.fdopen(fd, "w") as stream:
-                json.dump(profiles, stream, indent=2, allow_nan=False)
-            os.replace(temporary, self.path)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
+        data = json.dumps(profiles, indent=2, allow_nan=False).encode("utf-8")
+        replace_private_file(self.path, data)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
+import struct
 import time
 
 import pytest
@@ -20,6 +22,13 @@ pytestmark = pytest.mark.skipif(
 @pytest.mark.asyncio
 async def test_official_mock_manipulation_contract():
     async with mock_runtime(str(_URL)) as (client, state):
+        model = await client.asset("model", state["model_ref"])
+        web_model = Path(__file__).resolve().parents[2] / "clients/webxr/public/models/openyam.glb"
+        with web_model.open("rb") as asset:
+            magic, version, _, chunk_length, kind = struct.unpack("<4sIII4s", asset.read(20))
+            assert (magic, version, kind) == (b"glTF", 2, b"JSON")
+            document = json.loads(asset.read(chunk_length))
+        assert model["visual_signature"] == document["scenes"][document["scene"]]["extras"]["visual_signature"]
         pose = state["observations"][client.group]["pose"]
         target = {**pose, "position": [pose["position"][0] + 0.01, *pose["position"][1:]]}
         await client.acquire("manipulation_planning", target)
@@ -97,7 +106,6 @@ async def test_mock_reset_repeated_zero_and_orderly_parking():
 
 
 def test_official_workers_follow_authoritative_scene_changes():
-    from pathlib import Path
     import subprocess
     import sys
 

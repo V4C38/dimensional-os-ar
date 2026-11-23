@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import tempfile
 from pathlib import Path
 
 _KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -63,6 +64,8 @@ def merge_env(updates: dict[str, str | None], path: Path | None = None) -> None:
 
     A value of None removes the key. Empty string writes KEY=.
     """
+    if not updates:
+        return
     for value in updates.values():
         validate_env_value(value)
     target = path or env_path()
@@ -94,9 +97,18 @@ def merge_env(updates: dict[str, str | None], path: Path | None = None) -> None:
             raise ValueError(f"invalid env key: {key!r}")
         out.append(f"{key}={new_val}")
 
-    target.parent.mkdir(parents=True, exist_ok=True)
     text = "\n".join(out)
     if text and not text.endswith("\n"):
         text += "\n"
-    target.write_text(text, encoding="utf-8")
-    os.chmod(target, 0o600)
+    replace_private_file(target, text.encode("utf-8"))
+
+
+def replace_private_file(target: Path, data: bytes) -> None:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}-")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+        os.replace(temporary, target)
+    finally:
+        Path(temporary).unlink(missing_ok=True)

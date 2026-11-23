@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ARModuleSessionState } from "../src/websocket/ARModuleSession";
-import { isAgentEnabled, isManualControlEnabled, isSelectionEligible, OperatingModeController } from "../src/presentation/ControlPanelPresentation";
+import { Go2RecoveryReview, robotConnectionLabel, isAgentEnabled, isManualControlEnabled, isSelectionEligible, OperatingModeController } from "../src/presentation/ControlPanelPresentation";
 import { alignmentDistance } from "../src/presentation/NotificationCenter";
 import { prepareRoutePath } from "../src/presentation/RoutePathGeometry";
 import { projectRobotPose, robotFloorOffset, type RobotMarkerApplyInput } from "../src/robot/RobotPresentation";
@@ -15,6 +15,27 @@ function ready(): ARModuleSessionState {
     nav_goal: null, lidar: null, capabilities: hello.capabilities, nav: null,
     agentMessage: null, agentMessageRevision: 0, lastError: null };
 }
+it("offers the existing review once after robot or host reconnection", () => {
+  const review = new Go2RecoveryReview();
+  const view = ready();
+  const online = { ...view, state: { ...stateFrame(), robot_link: {
+    status: "online" as const, source_generation: 0, motion_ready: true, reason: null,
+  } } };
+  const offline = { ...online, state: { ...online.state, robot_link: {
+    ...online.state.robot_link, status: "offline" as const, motion_ready: false,
+  } } };
+  expect(review.observe(offline)).toBe(false);
+  expect(review.observe(online)).toBe(false);
+  expect(review.observe(offline)).toBe(false);
+  expect(review.observe(online)).toBe(true);
+  expect(review.observe(online)).toBe(false);
+  expect(review.observe({ ...view, connection: "disconnected" })).toBe(false);
+  expect(review.observe(view)).toBe(false);
+  expect(review.observe(online)).toBe(true);
+  expect(robotConnectionLabel("robotOffline")).toBe("Robot disconnected.");
+  expect(robotConnectionLabel("disconnected")).toBe("dimOS disconnected");
+});
+
 const origin = { position: [0, 0, 0], orientation: [0, 0, 0, 1], confidence: 1, ts: 0 } as const;
 
 it("shares route preparation in metres without mutating frozen host input", () => {
@@ -119,7 +140,7 @@ describe("setup LiDAR lifecycle", () => {
 
 it("updates agent response revisions once and stops recognition when session eligibility is lost", () => {
   const recognition = { start: vi.fn(), stop: vi.fn() }, synthesis = { speak: vi.fn(), stop: vi.fn() };
-  const draft = new AgentDraftSession({ recognition, synthesis, send: vi.fn(), estop: vi.fn(),
+  const draft = new AgentDraftSession({ recognition, synthesis, send: vi.fn(),
     isSelected: () => true, select: vi.fn() });
   const view = { ...ready(), agentMessage: "Ready", agentMessageRevision: 1 };
   draft.tickSession(0, view, true, "agent");

@@ -1,7 +1,8 @@
-"""Start injects CLI secret env names; incomplete VPS is rejected."""
+"""Start injects CLI secret env names and treats VPS setup as advisory."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -46,15 +47,29 @@ async def test_start_armodule_injects_secret_env(tmp_path: Path) -> None:
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+        await mgr.start_armodule(blueprint="unitree_go2_ar")
 
     assert captured["OPENAI_API_KEY"] == "sk-persisted"
     assert captured["MULTISET_CLIENT_ID"] == "id-1"
     assert captured["MULTISET_CLIENT_SECRET"] == "secret-1"
     assert captured["DIMOS_LOG_LEVEL"] == "DEBUG"
+    assert captured["DIMOS_AR_LAUNCHER_CONNECTIONS"] == "1"
+    assert captured["DIMOS_AR_LAUNCHER_KEEP_AWAKE"] == "1"
     assert "DIMOS_AR_TAG_MOUNTS" not in captured
     assert "DIMOS_PYTHON" not in captured
     assert "--blueprint" in mgr.build_start_argv(blueprint="unitree_go2_ar")
+
+
+@pytest.mark.asyncio
+async def test_selected_can_uses_the_openyam_connection_config(runtime, monkeypatch):
+    manager, _, spawn = runtime
+    monkeypatch.setenv("CAN_PORT", "old-can")
+    monkeypatch.setenv("OPENYAMCONNECTION__CAN_PORT", "stale-selection")
+    monkeypatch.setattr("armodule.check_can", AsyncMock(return_value={"ready": True}))
+    await manager.start_armodule(blueprint="openyam_ar_planner", can_port="can2")
+    env = spawn.call_args.kwargs["env"]
+    assert env["OPENYAMCONNECTION__CAN_PORT"] == "can2"
+    assert "CAN_PORT" not in env
 
 
 @pytest.mark.asyncio
@@ -72,7 +87,7 @@ async def test_start_armodule_pins_checked_dimos_python(tmp_path: Path) -> None:
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+        await mgr.start_armodule(blueprint="unitree_go2_ar")
 
     assert captured["DIMOS_PYTHON"] == "/tmp/dimos/.venv/bin/python3"
 
@@ -97,7 +112,7 @@ async def test_start_armodule_drops_inherited_dimos_python(
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+        await mgr.start_armodule(blueprint="unitree_go2_ar")
 
     assert "DIMOS_PYTHON" not in captured
 
@@ -116,20 +131,33 @@ async def test_start_armodule_defaults_log_level_to_info(tmp_path: Path) -> None
         patch.object(mgr, "_configure_system_if_needed", new=AsyncMock()),
         patch.object(mgr.runtime, "_spawn", new=fake_spawn),
     ):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs")
+        await mgr.start_armodule(blueprint="unitree_go2_ar")
 
     assert captured["DIMOS_LOG_LEVEL"] == "INFO"
 
 
 @pytest.mark.asyncio
-async def test_start_armodule_rejects_incomplete_vps(tmp_path: Path) -> None:
-    _scripts(tmp_path)
+@pytest.mark.parametrize("configured", [False, True])
+async def test_start_armodule_skips_only_unconfigured_vps(runtime, monkeypatch, configured) -> None:
+    mgr, _children, _spawn = runtime
+    for key in ("MULTISET_CLIENT_ID", "MULTISET_CLIENT_SECRET"):
+        monkeypatch.delenv(key, raising=False)
+        if configured:
+            monkeypatch.setenv(key, "value")
     configuration = armodule_config_from_ui(
-            fiducial_marker=False,
-            vps=True,
-            map_code="",
-            mounts=[DEFAULT_MOUNT],
-        )
-    mgr = ProcessManager(root=tmp_path)
-    with pytest.raises(ValueError, match="VPS is enabled"):
-        await mgr.start_armodule(blueprint="unitree_go2_ar", client="specs", armodule_config=configuration)
+        fiducial_marker=True,
+        vps=True,
+        map_code="office",
+        mounts=[DEFAULT_MOUNT],
+    )
+    await mgr.start_armodule(blueprint="unitree_go2_ar", armodule_config=configuration)
+
+    assert mgr.runtime.backend.config_path is not None
+    config = json.loads(mgr.runtime.backend.config_path.read_text())["armodule"]
+    providers = configuration["localization"]["providers"]
+    assert [provider["type"] for provider in providers] == ["fiducial_marker", "vps"]
+    assert config["localization"]["providers"] == (providers if configured else providers[:1])
+    if configured:
+        assert mgr.status.warning is None
+    else:
+        assert mgr.status.warning is not None and "VPS unavailable" in mgr.status.warning

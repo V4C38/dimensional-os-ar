@@ -63,7 +63,7 @@ def test_real_six_axis_targets_repeat_and_recover_after_unreachable_target(delta
         position=(np.array(model.home_joints) + delta).tolist(),
     ), ("gripper_tip",))["gripper_tip"]
     group = prepared.planning_groups[0]
-    truncated = PinkIK(config.kinematics.model_copy(update={"max_iterations": 12}))
+    truncated = PinkIK(config.kinematics.model_copy(update={"max_iterations": 1}))
     assert not truncated.solve_pose_targets(
         world, {group: target}, seed=seed, max_attempts=1
     ).is_success()

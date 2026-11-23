@@ -1,7 +1,7 @@
 import { composePose } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { LocalizationContext } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
-import { availableCapabilityLabels, localizationGuidance, localizationKind, localizationProviderLabel, localizationCaptureStatus, deriveSessionLinkPhase, NO_ROBOT_CONNECTED_LABEL, sessionLinkStatus, type SessionLinkPhase, type StatusText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { availableCapabilityLabels, localizationGuidance, localizationKind, localizationProviderLabel, localizationCaptureStatus, deriveSessionLinkPhase, robotConnectionLabel, NO_ROBOT_CONNECTED_LABEL, sessionLinkStatus, type SessionLinkPhase, type StatusText } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
 import { getRobotActivityState } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
 import { SETUP_PANEL_SCALE } from "./SpecsPanelPresentation";
@@ -455,7 +455,7 @@ export class SetupWizardController {
     const view = this.deps.session.view();
     const phase = deriveSessionLinkPhase(view);
     this.view.setRobotBadge?.(view.hello?.robot.display_name ?? "Robot",
-      { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[phase],
+      robotConnectionLabel(phase),
       getRobotActivityState(view));
   }
 

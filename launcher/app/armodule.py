@@ -20,10 +20,10 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Protocol, TypedDict, Unpack
+from typing import Any, Protocol, TypedDict, Unpack, cast
 from urllib.parse import urlsplit
 
-from can_setup import check_can, setup_command
+from can_setup import INTERFACE, check_can, setup_command
 from config import (
     env_path,
     merge_env,
@@ -36,8 +36,8 @@ from dimos_config import write_runtime_config
 from discovery import run_json_probe
 from launcher_events import LauncherEvents
 from owned_operation import OwnedOperation
+from process_groups import ProcessGroups, start_owned_process
 from robot_sources import BLUEPRINT_CLI, blueprint_definition
-from tag_config import ui_from_armodule_config
 
 ARMODULE_PORT = 8787
 WEBXR_PORT = 5173
@@ -47,7 +47,6 @@ STACK_PORTS = (ARMODULE_PORT, RERUN_WS_PORT, RERUN_GRPC_PORT)
 STOP_GRACE_SECONDS = 8.0
 DIMOS_STOP_GRACE_SECONDS = 60.0
 BLUEPRINTS = tuple(BLUEPRINT_CLI)
-CLIENTS = ("specs", "webxr")
 
 _RE_ANSI = re.compile(r"\x1b\[[0-9;]*m")
 _RE_ARMODULE_READY = re.compile(r"ARModule ready\s+[—\-]\s+(ws://\S+)", re.IGNORECASE)
@@ -69,6 +68,52 @@ def _strip_ansi(text: str) -> str:
     return _RE_ANSI.sub("", text)
 
 
+async def _spawn_owned(
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str] | None,
+    record: Callable[[asyncio.subprocess.Process], None],
+) -> asyncio.subprocess.Process:
+    return await start_owned_process(asyncio.create_subprocess_exec(
+        *argv,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+        cwd=str(cwd),
+        env=env,
+        start_new_session=True,
+    ), record)
+
+
+def _usable_localization(
+    config: dict[str, Any], env: dict[str, str],
+) -> tuple[dict[str, Any], str | None]:
+    localization = config.get("localization") or {}
+    providers = localization.get("providers")
+    if not isinstance(providers, list):
+        return config, None
+    missing_credentials = [
+        key for key in ("MULTISET_CLIENT_ID", "MULTISET_CLIENT_SECRET") if not env.get(key, "").strip()
+    ]
+    missing = set()
+    usable = []
+    for provider in providers:
+        if isinstance(provider, dict) and provider.get("type") == "vps":
+            problems = missing_credentials.copy()
+            if not str(provider.get("map_code") or "").strip():
+                problems.append("map code")
+            if problems:
+                missing.update(problems)
+                continue
+        usable.append(provider)
+    if not missing:
+        return config, None
+    return (
+        {**config, "localization": {**localization, "providers": usable}},
+        "VPS unavailable for this run. Configure " + ", ".join(sorted(missing)) + " to enable it.",
+    )
+
+
 def abs_dimos_python(path: str) -> str:
     """Absolutize a venv interpreter without following the python symlink.
 
@@ -87,7 +132,7 @@ def detect_lan_ip() -> str:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     try:
         sock.connect(("8.8.8.8", 80))
-        ip = sock.getsockname()[0]
+        ip = str(sock.getsockname()[0])
         if ip and not ip.startswith("127."):
             return ip
     except OSError:
@@ -112,6 +157,7 @@ class Phase(str, Enum):
 @dataclass(frozen=True)
 class LauncherStatus:
     phase: Phase = Phase.IDLE
+    running_since_ms: int | None = None
     check_ok: bool | None = None
     dimos_python: str | None = None
     dimos_version: str | None = None
@@ -122,7 +168,6 @@ class LauncherStatus:
     robot_ip: str | None = None
     warning: str | None = None
     blueprint: str | None = None
-    client: str | None = None
     webxr_phase: str = "stopped"
     webxr_error: str | None = None
     webxr_url: str | None = None
@@ -132,13 +177,14 @@ class LauncherStatus:
 
 @dataclass(frozen=True)
 class RuntimeFacts:
+    connections: tuple[dict[str, str | int], ...] = ()
     phase: Phase | None = None
+    running_since_ms: int | None = None
     websocket_url: str | None = None
     pin: str | None = None
     robot_ip: str | None = None
     warning: str | None = None
     blueprint: str | None = None
-    client: str | None = None
     webxr_phase: str = "stopped"
     webxr_error: str | None = None
     webxr_url: str | None = None
@@ -146,20 +192,23 @@ class RuntimeFacts:
     error: str | None = None
 
 
-class RuntimeUpdate(TypedDict, total=False):
+class RuntimeFields(TypedDict, total=False):
     phase: Phase | None
+    running_since_ms: int | None
     websocket_url: str | None
-    host_ip: str | None
     pin: str | None
     robot_ip: str | None
     warning: str | None
     blueprint: str | None
-    client: str | None
     webxr_phase: str
     webxr_error: str | None
     webxr_url: str | None
     webxr_local_url: str | None
     error: str | None
+
+
+class RuntimeUpdate(RuntimeFields, total=False):
+    host_ip: str | None
 
 
 @dataclass(frozen=True)
@@ -173,7 +222,7 @@ class DependencyFacts:
     warning: str | None = None
 
 
-class DependencyUpdate(TypedDict, total=False):
+class DependencyFields(TypedDict, total=False):
     phase: Phase
     check_ok: bool | None
     dimos_python: str | None
@@ -181,10 +230,14 @@ class DependencyUpdate(TypedDict, total=False):
     dimos_ref: str | None
     error: str | None
     warning: str | None
+
+
+class DependencyUpdate(DependencyFields, total=False):
     host_ip: str | None
 
 
 class RuntimePorts(Protocol):
+    process_groups: ProcessGroups
     root: Path
     _lock: asyncio.Lock
     dimos_stop_grace_seconds: float
@@ -197,7 +250,9 @@ class RuntimePorts(Protocol):
         self, *, takeover_pids: list[int] | None = None
     ) -> None: ...
 
-    async def _configure_system_if_needed(self) -> None: ...
+    async def _configure_system_if_needed(
+        self, *, config_path: Path | None = None, env: dict[str, str] | None = None,
+    ) -> None: ...
 
     async def _drain_output(
         self,
@@ -205,11 +260,7 @@ class RuntimePorts(Protocol):
         on_line: Callable[[str], Awaitable[None]] | None = None,
     ) -> int: ...
 
-    async def _ensure_webxr_deps(self) -> None: ...
-
-    def _require_vps_credentials(
-        self, armodule_config: dict[str, Any] | None = None
-    ) -> None: ...
+    async def _ensure_webxr_deps(self, env: dict[str, str]) -> None: ...
 
     def _webxr_dir(self) -> Path: ...
 
@@ -224,12 +275,12 @@ class RuntimePorts(Protocol):
     @property
     def can_setup_running(self) -> bool: ...
 
-    async def can_status(self, interface: str = "can0") -> dict[str, Any]: ...
+    async def can_status(self, interface: str = INTERFACE) -> dict[str, Any]: ...
 
     async def cancel_dependencies(self) -> None: ...
 
     @property
-    def dependency_process(self) -> asyncio.subprocess.Process | None: ...
+    def dependency_processes(self) -> tuple[asyncio.subprocess.Process | None, ...]: ...
 
     @property
     def dependency_running(self) -> bool: ...
@@ -239,6 +290,8 @@ class RuntimePorts(Protocol):
     async def planner_status(self, *, force: bool = False) -> dict[str, Any]: ...
 
     def publish_status(self) -> None: ...
+
+    def publish_connections(self, rows: tuple[dict[str, str | int], ...]) -> None: ...
 
     @property
     def status(self) -> LauncherStatus: ...
@@ -313,12 +366,45 @@ class ProcessManager:
             )
         self.root = root or repo_root()
         self.scripts = scripts_dir(self.root)
-        self._host_ip = detect_lan_ip()
+        self._host_ip: str | None = detect_lan_ip()
         self.events = LauncherEvents(self.snapshot)
+        self.process_groups = ProcessGroups(self._append_log)
         self.runtime = RuntimeProcesses(self)
         self.dependencies = DependencyOperations(self)
         self._lock = asyncio.Lock()
+        self._launch_attempt: asyncio.Task[dict[str, Any]] | None = None
+        self._shutdown: asyncio.Task[None] | None = None
         self.planner = PlannerReadiness(self)
+
+    async def run_launch_attempt(
+        self, launch: Callable[[], Awaitable[dict[str, Any]]],
+    ) -> dict[str, Any]:
+        if self._launch_attempt is not None:
+            raise RuntimeError("ARModule is already starting")
+        if self._shutdown is not None and not self._shutdown.done():
+            raise RuntimeError("ARModule is stopping")
+
+        async def attempt() -> dict[str, Any]:
+            return await launch()
+
+        task = asyncio.create_task(attempt())
+        self._launch_attempt = task
+        try:
+            return await task
+        except asyncio.CancelledError:
+            caller = asyncio.current_task()
+            if caller is not None and caller.cancelling():
+                raise
+            raise RuntimeError("Startup cancelled") from None
+        finally:
+            self._launch_attempt = None
+
+    async def _cancel_launch_attempt(self) -> None:
+        task = self._launch_attempt
+        if task is not None and not task.done():
+            if not task.cancelling():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
     @property
     def status(self) -> LauncherStatus:
@@ -334,7 +420,7 @@ class ProcessManager:
             pin=runtime.pin,
             robot_ip=runtime.robot_ip,
             blueprint=runtime.blueprint,
-            client=runtime.client,
+            running_since_ms=runtime.running_since_ms,
             webxr_phase=runtime.webxr_phase,
             webxr_error=runtime.webxr_error,
             webxr_url=runtime.webxr_url,
@@ -349,11 +435,16 @@ class ProcessManager:
     def publish_status(self) -> None:
         self._emit({"type": "status", **self.snapshot()})
 
+    def publish_connections(self, rows: tuple[dict[str, str | int], ...]) -> None:
+        self._emit({"type": "connections", "connections": rows})
+
     @property
     def runtime_running(self) -> bool:
+        webxr_start = self.runtime.pending_webxr_start
         return (
             self.runtime.backend.process is not None
             or self.runtime.webxr.process is not None
+            or (webxr_start is not None and not webxr_start.done())
         )
 
     @property
@@ -361,8 +452,8 @@ class ProcessManager:
         return self.dependencies.operation.running
 
     @property
-    def dependency_process(self) -> asyncio.subprocess.Process | None:
-        return self.dependencies.operation.process
+    def dependency_processes(self) -> tuple[asyncio.subprocess.Process | None, ...]:
+        return self.dependencies.operation.process, self.dependencies.can_operation.process
 
     @property
     def can_setup_running(self) -> bool:
@@ -379,15 +470,17 @@ class ProcessManager:
 
     @property
     def can_edit_configuration(self) -> bool:
-        return self.status.phase not in {Phase.STARTING, Phase.RUNNING, Phase.STOPPING}
+        return self._launch_attempt is None and self.status.phase not in {
+            Phase.STARTING, Phase.RUNNING, Phase.STOPPING,
+        }
 
     @property
     def selected_python(self) -> str | None:
         return self.status.dimos_python
 
     def snapshot(self) -> dict[str, Any]:
-        stored = read_env(env_path(self.root))
-        dimos_install_dir = self.status.dimos_python
+        status = self.status
+        dimos_install_dir = status.dimos_python
         if dimos_install_dir:
             interpreter = Path(dimos_install_dir).absolute()
             environment = interpreter.parent.parent
@@ -397,29 +490,27 @@ class ProcessManager:
             ):
                 dimos_install_dir = str(environment.parent)
         return {
-            "phase": self.status.phase.value,
-            "check_ok": self.status.check_ok,
-            "dimos_python": self.status.dimos_python,
+            "phase": status.phase.value,
+            "connections": self.runtime.facts.connections,
+            "check_ok": status.check_ok,
+            "dimos_python": status.dimos_python,
             "dimos_install_dir": dimos_install_dir,
-            "dimos_version": self.status.dimos_version,
-            "dimos_ref": self.status.dimos_ref,
-            "websocket_url": self.status.websocket_url,
-            "host_ip": self.status.host_ip,
-            "pin": self.status.pin,
-            "webxr_phase": self.status.webxr_phase,
-            "webxr_error": self.status.webxr_error,
-            "robot_ip": self.status.robot_ip,
-            "warning": self.status.warning,
-            "blueprint": self.status.blueprint,
-            "client": self.status.client,
-            "webxr_url": self.status.webxr_url,
-            "webxr_local_url": self.status.webxr_local_url,
-            "error": self.status.error,
+            "dimos_version": status.dimos_version,
+            "dimos_ref": status.dimos_ref,
+            "websocket_url": status.websocket_url,
+            "host_ip": status.host_ip,
+            "pin": status.pin,
+            "webxr_phase": status.webxr_phase,
+            "webxr_error": status.webxr_error,
+            "robot_ip": status.robot_ip,
+            "warning": status.warning,
+            "blueprint": status.blueprint,
+            "running_since_ms": status.running_since_ms,
+            "webxr_url": status.webxr_url,
+            "webxr_local_url": status.webxr_local_url,
+            "error": status.error,
             "can_setup_running": self.dependencies.can_setup_running,
             "planner": self.planner.snapshot(),
-            "openai_api_key": stored.get("OPENAI_API_KEY", ""),
-            "multiset_client_id": stored.get("MULTISET_CLIENT_ID", ""),
-            "multiset_client_secret": stored.get("MULTISET_CLIENT_SECRET", ""),
             "default_clone_dir": str((self.root.parent / "dimos").resolve()),
         }
 
@@ -499,6 +590,38 @@ class ProcessManager:
                 pids.append(pid)
         return pids
 
+    async def _stop_previous_blueprints(self) -> None:
+        listeners = {
+            pid
+            for port in STACK_PORTS
+            for pid in await self._pids_listening(port)
+        }
+        groups = set()
+        for pid in listeners:
+            try:
+                groups.add(os.getpgid(pid))
+            except ProcessLookupError:
+                continue
+        for group in sorted(groups - {os.getpgrp()}):
+            process = await asyncio.create_subprocess_exec(
+                "ps", "-p", str(group), "-o", "command=",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            output, _ = await process.communicate()
+            if process.returncode != 0 or not re.search(
+                r"^(?:(?:/[^\n]*?/)?python(?:3(?:\.\d+)?)? )?(?:/[^\n]*?/)?dimos run dimos-ar\.[\w-]+(?:\s|$)",
+                output.decode(errors="replace").strip(),
+            ):
+                continue
+            self.runtime.update_status(phase=Phase.STOPPING)
+            try:
+                await self.process_groups.stop_group(
+                    group, "previous DimOS blueprint", STOP_GRACE_SECONDS
+                )
+            finally:
+                self.runtime.update_status(phase=Phase.READY if self.status.check_ok else Phase.IDLE)
+
     async def _clear_before_start(
         self, *, takeover_pids: list[int] | None = None
     ) -> None:
@@ -531,7 +654,7 @@ class ProcessManager:
                 for port, pids in occupied.items()
             )
             raise RuntimeError(
-                f"Required ports are in use: {detail}. Stop those processes or explicitly select their PIDs for takeover."
+                f"Required ports are in use: {detail}. Close the session or app using those ports, then run the blueprint again."
             )
         self._append_log(
             "Taking over explicitly selected listeners: "
@@ -604,7 +727,9 @@ class ProcessManager:
             argv.extend(["--dimos-ref", dimos_ref.strip()])
         return argv
 
-    async def _configure_system_if_needed(self) -> None:
+    async def _configure_system_if_needed(
+        self, *, config_path: Path | None = None, env: dict[str, str] | None = None,
+    ) -> None:
         """Apply DimOS's required macOS settings via one native admin prompt.
 
         The privileged commands live in configure-system.sh; here we only detect
@@ -614,10 +739,20 @@ class ProcessManager:
         """
         if sys.platform != "darwin":
             return
+        python = self._selected_python()
+        if not python:
+            raise ValueError("Select an installed DimOS environment first")
+        transport = await run_json_probe(
+            python, str(self.scripts / "transport_check.py"), str(config_path or ""),
+            cwd=self.root / "launcher", env=env, timeout=10, error="DimOS transport check failed",
+        )
+        if transport != "lcm":
+            return
         helper = self.scripts / "configure-system.sh"
         if not helper.exists():
             return
-        state_dir = str(Path.home() / ".local" / "state" / "dimos")
+        state_home = os.environ.get("XDG_STATE_HOME")
+        state_dir = str((Path(state_home) if state_home else Path.home() / ".local/state") / "dimos")
 
         check = await asyncio.create_subprocess_exec(
             str(helper),
@@ -628,8 +763,11 @@ class ProcessManager:
             stderr=asyncio.subprocess.DEVNULL,
             cwd=str(self.root),
         )
-        if await check.wait() == 0:
+        result = await check.wait()
+        if result == 0:
             return
+        if result != 10:
+            raise RuntimeError(f"macOS networking check failed ({result})")
 
         self._append_log(
             "Requesting administrator access to configure macOS networking "
@@ -639,47 +777,19 @@ class ProcessManager:
         applescript_cmd = inner.replace("\\", "\\\\").replace('"', '\\"')
         script = f'do shell script "{applescript_cmd}" with administrator privileges'
 
-        proc = await asyncio.create_subprocess_exec(
-            "osascript",
-            "-e",
-            script,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self.root),
-        )
-        assert proc.stdout is not None
-        while True:
-            raw = await proc.stdout.readline()
-            if not raw:
-                break
-            self._append_log(raw.decode("utf-8", errors="replace").rstrip("\n"))
-        if await proc.wait() != 0:
-            raise RuntimeError(
-                "System configuration was cancelled or failed. "
-                "Approve the administrator prompt to start ARModule."
-            )
-
-    def _require_vps_credentials(
-        self, armodule_config: dict[str, Any] | None = None
-    ) -> None:
-        ui = ui_from_armodule_config(armodule_config)
-        if not ui["vps"]:
-            return
-        stored = read_env(env_path(self.root))
-        missing: list[str] = []
-        if not str(ui.get("map_code") or "").strip():
-            missing.append("map code")
-        if not stored.get("MULTISET_CLIENT_ID"):
-            missing.append("MULTISET_CLIENT_ID")
-        if not stored.get("MULTISET_CLIENT_SECRET"):
-            missing.append("MULTISET_CLIENT_SECRET")
-        if missing:
-            raise ValueError("VPS is enabled but missing " + ", ".join(missing))
+        async with self._logged_command(
+            ["osascript", "-e", script], cwd=self.root, label="macOS network setup",
+        ) as proc:
+            if await asyncio.wait_for(self._drain_output(proc), timeout=120) != 0:
+                raise RuntimeError(
+                    "System configuration was cancelled or failed. "
+                    "Approve the administrator prompt to start ARModule."
+                )
 
     def _webxr_dir(self) -> Path:
         return self.root / "clients" / "webxr"
 
-    async def _ensure_webxr_deps(self) -> None:
+    async def _ensure_webxr_deps(self, env: dict[str, str]) -> None:
         webxr_dir = self._webxr_dir()
         if not webxr_dir.is_dir():
             raise RuntimeError(f"WebXR client not found at {webxr_dir}")
@@ -692,6 +802,7 @@ class ProcessManager:
             ["npm", "ci"],
             "WebXR dependency installation",
             "npm ci failed in clients/webxr",
+            env=env,
         )
 
     async def _build_webxr(self, env: dict[str, str]) -> None:
@@ -727,18 +838,16 @@ class ProcessManager:
         env: dict[str, str] | None = None,
     ) -> AsyncIterator[asyncio.subprocess.Process]:
         self._append_log(f"$ {' '.join(argv)}")
-        proc = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(cwd),
-            env=env,
-            start_new_session=True,
-        )
+        proc = None
+
+        def record(child: asyncio.subprocess.Process) -> None:
+            nonlocal proc
+            proc = child
+
         try:
-            yield proc
+            yield await _spawn_owned(argv, cwd=cwd, env=env, record=record)
         finally:
-            await self.runtime._stop_one(proc, label)
+            await self.process_groups.stop(proc, label, STOP_GRACE_SECONDS)
 
     async def _drain_output(
         self,
@@ -749,15 +858,25 @@ class ProcessManager:
         decoder = codecs.getincrementaldecoder("utf-8")("replace")
         pending = ""
         started = last_output = time.monotonic()
+        exit_drain_deadline = None
 
         async def publish(line: str) -> None:
             if not line:
                 return
-            self._append_log(line)
+            if not line.startswith("DIMOS_AR_CONNECTIONS "):
+                self._append_log(line)
             if on_line is not None:
                 await on_line(line)
 
         while True:
+            if proc.returncode is not None:
+                # Give buffered terminal output a short grace period. An
+                # orphan can retain and continue writing into the pipe.
+                now = time.monotonic()
+                if exit_drain_deadline is None:
+                    exit_drain_deadline = now + 0.1
+                elif now >= exit_drain_deadline:
+                    break
             try:
                 raw = await asyncio.wait_for(proc.stdout.read(4096), timeout=0.1)
             except TimeoutError:
@@ -780,6 +899,9 @@ class ProcessManager:
             pending = parts.pop()
             for line in parts:
                 await publish(line)
+            if len(pending) >= 65536:
+                await publish(pending)
+                pending = ""
         await publish(pending + decoder.decode(b"", final=True))
         return await proc.wait()
 
@@ -807,17 +929,16 @@ class ProcessManager:
             manipulation=manipulation,
         )
 
-    async def can_status(self, interface: str = "can0") -> dict[str, Any]:
+    async def can_status(self, interface: str = INTERFACE) -> dict[str, Any]:
         return await self.dependencies.can_status(interface)
 
-    async def setup_can(self, interface: str = "can0") -> dict[str, Any]:
+    async def setup_can(self, interface: str = INTERFACE) -> dict[str, Any]:
         return await self.dependencies.setup_can(interface)
 
     async def start_armodule(
         self,
         *,
         blueprint: str,
-        client: str,
         robot_ip: str | None = None,
         armodule_config: dict[str, Any] | None = None,
         simulation: bool = False,
@@ -828,7 +949,6 @@ class ProcessManager:
     ) -> None:
         await self.runtime.start_armodule(
             blueprint=blueprint,
-            client=client,
             robot_ip=robot_ip,
             armodule_config=armodule_config,
             simulation=simulation,
@@ -847,10 +967,24 @@ class ProcessManager:
         await self.runtime.stop_webxr()
 
     async def stop_backend(self) -> None:
+        await self._cancel_launch_attempt()
         await self.runtime.stop_backend()
 
-    async def stop_armodule(self, *, force: bool = False) -> None:
-        await self.runtime.stop_armodule(force=force)
+    async def stop_armodule(self, *, force: bool = False, include_previous: bool = False) -> None:
+        async def shutdown() -> None:
+            await self._cancel_launch_attempt()
+            await self.runtime.stop_armodule()
+            if include_previous:
+                async with self._lock:
+                    await self._stop_previous_blueprints()
+
+        if self._shutdown is None or self._shutdown.done():
+            self._shutdown = asyncio.create_task(shutdown())
+        if force:
+            await self.runtime.stop_armodule(force=True)
+            if self._lock.locked():
+                return
+        await asyncio.shield(self._shutdown)
 
 
 @dataclass
@@ -876,7 +1010,6 @@ class RuntimeProcesses:
         self.backend = ProcessSession()
         self.webxr = ProcessSession()
         self.pending_webxr_start: asyncio.Task[None] | None = None
-        self.stopping_pids: set[int] = set()
         self.facts = RuntimeFacts()
 
     def update_status(self, **changes: Unpack[RuntimeUpdate]) -> None:
@@ -884,8 +1017,33 @@ class RuntimeProcesses:
             self.host.observe_host_ip(changes.pop("host_ip"))
         if changes.get("phase") in {Phase.READY, Phase.IDLE}:
             changes["phase"] = None
-        self.facts = replace(self.facts, **changes)
+        if "phase" in changes and changes["phase"] != self.facts.phase:
+            changes["running_since_ms"] = (
+                time.time_ns() // 1_000_000 if changes["phase"] == Phase.RUNNING else None
+            )
+        self.facts = replace(self.facts, **cast(RuntimeFields, changes))
         self.host.publish_status()
+
+    def _update_connections(self, rows: tuple[dict[str, str], ...]) -> None:
+        def identity(row: dict[str, str | int]) -> tuple[str | int | None, ...]:
+            return row.get("kind"), row.get("id"), row.get("name")
+
+        previous = {
+            identity(row): row["online_since_ms"]
+            for row in self.facts.connections
+            if "online_since_ms" in row
+        }
+        now = time.time_ns() // 1_000_000
+        updated: list[dict[str, str | int]] = []
+        for row in rows:
+            item: dict[str, str | int] = {**row}
+            if item["status"] == "online":
+                item["online_since_ms"] = previous.get(identity(item), now)
+            updated.append(item)
+        snapshot = tuple(updated)
+        if snapshot != self.facts.connections:
+            self.facts = replace(self.facts, connections=snapshot)
+            self.host.publish_connections(snapshot)
 
     def clear_terminal_status(self) -> None:
         if self.backend.process is not None or self.webxr.process is not None:
@@ -899,6 +1057,22 @@ class RuntimeProcesses:
 
     def _parse_armodule_line(self, line: str) -> None:
         plain = _strip_ansi(line)
+        if plain.startswith("DIMOS_AR_CONNECTIONS "):
+            try:
+                rows = json.loads(plain.removeprefix("DIMOS_AR_CONNECTIONS "))
+            except ValueError:
+                return
+            if not isinstance(rows, list) or any(
+                not isinstance(row, dict)
+                or row.get("kind") not in ("robot", "client")
+                or row.get("status") not in ("online", "offline", "waiting")
+                or any(key not in ("kind", "status", "name", "id") or not isinstance(value, str)
+                       for key, value in row.items())
+                for row in rows
+            ):
+                return
+            self._update_connections(tuple(rows))
+            return
         if (
             "Exception in RPC handler for " in plain
             and "/start:" in plain
@@ -951,7 +1125,17 @@ class RuntimeProcesses:
             return
         kind, url = match.groups()
         if kind == "Local":
-            self.update_status(webxr_local_url=url)
+            host_ip = self.host.status.host_ip
+            self.update_status(
+                webxr_phase="running",
+                webxr_local_url=url,
+                webxr_url=self.facts.webxr_url or (
+                    f"https://{host_ip}:{WEBXR_PORT}"
+                    if host_ip and host_ip != "unknown" else None
+                ),
+            )
+            return
+        if self.facts.webxr_phase != "running":
             return
         try:
             host = urlsplit(url).hostname
@@ -978,23 +1162,24 @@ class RuntimeProcesses:
             "--strictPort",
         ]
         self.host._append_log(f"$ {' '.join(argv)}")
-        self.webxr.process = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self.host._webxr_dir()),
-            env=env,
-            start_new_session=True,
-        )
+
+        def record(proc: asyncio.subprocess.Process) -> None:
+            self.webxr.process = proc
+
+        try:
+            proc = await _spawn_owned(argv, cwd=self.host._webxr_dir(), env=env, record=record)
+        except asyncio.CancelledError:
+            await self._stop_one(self.webxr.process, "WebXR")
+            self.webxr.process = None
+            raise
         self.webxr.reader = asyncio.create_task(
-            self._read_webxr_stream(self.webxr.process)
+            self._read_webxr_stream(proc)
         )
 
     async def start_armodule(
         self,
         *,
         blueprint: str,
-        client: str,
         robot_ip: str | None = None,
         armodule_config: dict[str, Any] | None = None,
         simulation: bool = False,
@@ -1005,8 +1190,6 @@ class RuntimeProcesses:
     ) -> None:
         if blueprint not in BLUEPRINTS:
             raise ValueError(f"blueprint must be one of {', '.join(BLUEPRINTS)}")
-        if client not in CLIENTS:
-            raise ValueError(f"client must be one of {', '.join(CLIENTS)}")
         async with self.host._lock:
             if self.backend.process is not None or self.host.dependency_running:
                 raise RuntimeError(
@@ -1025,26 +1208,18 @@ class RuntimeProcesses:
                     raise ValueError(planner["message"])
                 if not simulation:
                     can = (
-                        await check_can(can_port)
+                        await self.host.can_status(can_port)
                         if can_port
                         else await self.host.can_status()
                     )
                     if not can["ready"]:
                         raise ValueError(can["message"])
-            self.host._require_vps_credentials(armodule_config)
-            await self.host._clear_before_start(
-                **(
-                    {"takeover_pids": takeover_pids}
-                    if takeover_pids is not None
-                    else {}
-                )
-            )
-            await self.host._configure_system_if_needed()
-
             pinned_ip = robot_ip.strip() if robot_ip else None
 
             env = os.environ.copy()
             env["DIMOS_AR_SKIP_SYSCONFIG"] = "1"
+            env["DIMOS_AR_LAUNCHER_CONNECTIONS"] = "1"
+            env["DIMOS_AR_LAUNCHER_KEEP_AWAKE"] = "1"
             env.pop("ROBOT_IP", None)
             env.pop("DIMOS_PYTHON", None)
             env["DIMOS_AR_FORCE_COLOR"] = "1"
@@ -1066,6 +1241,7 @@ class RuntimeProcesses:
                     env.pop(key)
             for key in (
                 "CAN_PORT",
+                "OPENYAMCONNECTION__CAN_PORT",
                 "REPLAY_DB",
                 "SIMULATION",
                 "REPLAY",
@@ -1075,17 +1251,35 @@ class RuntimeProcesses:
             ):
                 env.pop(key, None)
             if can_port:
-                env["CAN_PORT"] = can_port
+                env["OPENYAMCONNECTION__CAN_PORT"] = can_port
             if replay:
                 env["REPLAY_DB"] = replay
                 env["DIMOS_AR_REPLAY_STREAMS"] = json.dumps(replay_streams or {})
             if simulation:
                 env["DIMOS_AR_SIMULATION"] = "1"
+            config, warning = _usable_localization(armodule_config or {}, env)
             self.backend = ProcessSession()
             self.backend.config_path = write_runtime_config(
-                armodule_config or {},
-                use_go2_localization=blueprint_definition(blueprint).robot == "unitree_go2",
+                config,
+                use_go2_localization=(
+                    blueprint_definition(blueprint).robot == "unitree_go2"
+                    and pinned_ip != "simulated" and not replay
+                ),
             )
+            try:
+                await self.host._configure_system_if_needed(
+                    config_path=self.backend.config_path, env=env,
+                )
+                await self.host._clear_before_start(
+                    **(
+                        {"takeover_pids": takeover_pids}
+                        if takeover_pids is not None
+                        else {}
+                    )
+                )
+            except BaseException:
+                self._clear_run_config()
+                raise
             argv = self.host.build_start_argv(
                 blueprint=blueprint,
                 robot_ip=pinned_ip,
@@ -1094,33 +1288,36 @@ class RuntimeProcesses:
             self.update_status(
                 phase=Phase.STARTING,
                 blueprint=blueprint,
-                client=client,
                 websocket_url=None,
                 host_ip=host_ip,
                 pin=None,
                 robot_ip=pinned_ip,
-                warning=None,
+                warning=warning,
                 error=None,
             )
+            if warning:
+                self.host._append_log(warning)
             self.host._append_log(f"$ {' '.join(argv)}")
             try:
                 await self._spawn(argv, env=env)
             except BaseException as exc:
-                self._clear_run_config()
+                if self.backend.process is not None:
+                    await self._stop_backend_unlocked()
+                else:
+                    self._clear_run_config()
                 self.update_status(
                     phase=Phase.ERROR, error=str(exc) or "Startup cancelled"
                 )
                 raise
             if (
-                client == "webxr"
+                self.backend.process is not None
                 and self.webxr.process is None
                 and self.pending_webxr_start is None
             ):
-                assert self.backend.process is not None
                 self.host._append_log("Waiting for ARModule before starting WebXR…")
                 self.pending_webxr_start = asyncio.create_task(
                     self._start_webxr_when_ready(
-                        self.backend.process, self.backend.ready, env
+                        self.backend.process, self.backend.ready, self._webxr_environment()
                     )
                 )
 
@@ -1130,19 +1327,26 @@ class RuntimeProcesses:
         ready: asyncio.Event,
         env: dict[str, str],
     ) -> None:
-        await ready.wait()
-        async with self.host._lock:
-            if (
-                self.backend.process is not proc
-                or proc.returncode is not None
-                or self.host.status.phase != Phase.RUNNING
-            ):
-                return
         try:
+            await ready.wait()
+            async with self.host._lock:
+                if (
+                    self.backend.process is not proc
+                    or proc.returncode is not None
+                    or self.host.status.phase != Phase.RUNNING
+                ):
+                    return
             await self.start_webxr(env=env, scheduled=True)
         finally:
             if self.pending_webxr_start is asyncio.current_task():
                 self.pending_webxr_start = None
+
+    @staticmethod
+    def _webxr_environment() -> dict[str, str]:
+        env = os.environ.copy()
+        for key in ("OPENAI_API_KEY", "MULTISET_CLIENT_ID", "MULTISET_CLIENT_SECRET"):
+            env.pop(key, None)
+        return env
 
     async def start_webxr(
         self, *, env: dict[str, str] | None = None, scheduled: bool = False
@@ -1153,24 +1357,24 @@ class RuntimeProcesses:
                 and self.pending_webxr_start is not asyncio.current_task()
             ):
                 raise RuntimeError("WebXR is already running or starting")
+            if self.host.dependency_running or self.host.can_setup_running:
+                raise RuntimeError("Wait for DimOS setup to finish before starting WebXR")
             self.pending_webxr_start = asyncio.current_task()
             self.update_status(webxr_phase="starting", webxr_error=None)
+        webxr_env = env if env is not None else self._webxr_environment()
         try:
-            await self.host._ensure_webxr_deps()
-            await self.host._build_webxr(env or os.environ.copy())
+            await self.host._ensure_webxr_deps(webxr_env)
+            await self.host._build_webxr(webxr_env)
             async with self.host._lock:
-                await self._spawn_webxr(env or os.environ.copy())
-                host_ip = self.host.status.host_ip
-                self.update_status(
-                    webxr_phase="running",
-                    webxr_local_url=f"https://localhost:{WEBXR_PORT}",
-                    webxr_url=(
-                        f"https://{host_ip}:{WEBXR_PORT}"
-                        if host_ip and host_ip != "unknown"
-                        else None
-                    ),
-                )
+                await self._spawn_webxr(webxr_env)
         except asyncio.CancelledError:
+            if self.pending_webxr_start is asyncio.current_task():
+                self.update_status(
+                    webxr_phase="stopped",
+                    webxr_error=None,
+                    webxr_url=None,
+                    webxr_local_url=None,
+                )
             raise
         except (OSError, RuntimeError) as exc:
             self.host._append_log(f"Failed to start WebXR: {exc}")
@@ -1187,10 +1391,11 @@ class RuntimeProcesses:
                 self.pending_webxr_start = None
 
     async def _stop_webxr_unlocked(self) -> bool:
-        proc, self.webxr.process = self.webxr.process, None
+        proc = self.webxr.process
         task, self.pending_webxr_start = self.pending_webxr_start, None
         await self._cancel_task(task)
         stopped = await self._stop_one(proc, "WebXR")
+        self.webxr.process = None
         await self._cancel_task(self.webxr.reader)
         self.webxr.reader = None
         self.update_status(
@@ -1221,7 +1426,7 @@ class RuntimeProcesses:
             self.backend.config_path = None
 
     async def _stop_backend_unlocked(self) -> bool:
-        proc, self.backend.process = self.backend.process, None
+        proc = self.backend.process
         # Cancel a pending client start waiting for this backend.
         if (
             self.pending_webxr_start is not None
@@ -1230,76 +1435,22 @@ class RuntimeProcesses:
             task, self.pending_webxr_start = self.pending_webxr_start, None
             await self._cancel_task(task)
         stopped = await self._stop_one(proc, "ARModule")
+        self.backend.process = None
         self._clear_run_config()
         await self._cancel_task(self.backend.reader)
         self.backend.reader = None
+        self._update_connections(())
         return stopped
 
     async def _stop_one(
-        self,
-        proc: asyncio.subprocess.Process | None,
-        label: str,
+        self, proc: asyncio.subprocess.Process | None, label: str,
     ) -> bool:
-        if proc is None:
-            return False
-        if proc.returncode is not None:
-            try:
-                os.killpg(proc.pid, 0)
-            except ProcessLookupError:
-                return False
-        self.stopping_pids.add(proc.pid)
-        self.host._append_log(f"Stopping {label} (SIGINT)…")
-        try:
-            os.killpg(proc.pid, signal.SIGINT)
-        except ProcessLookupError:
-            pass
-        try:
-            grace = (
-                self.host.dimos_stop_grace_seconds
-                if label == "ARModule"
-                else STOP_GRACE_SECONDS
-            )
-            if label == "ARModule" and self.manipulation_required:
-                grace += 65  # Allow the supervisor to park before stopping DimOS.
-
-            async def wait_for_group() -> None:
-                while True:
-                    try:
-                        os.killpg(proc.pid, 0)
-                    except ProcessLookupError:
-                        return
-                    if Path("/proc").is_dir():
-                        live = False
-                        for entry in Path("/proc").iterdir():
-                            if not entry.name.isdigit():
-                                continue
-                            try:
-                                fields = (
-                                    (entry / "stat")
-                                    .read_text()
-                                    .rsplit(")", 1)[1]
-                                    .split()
-                                )
-                                live |= int(fields[2]) == proc.pid and fields[0] != "Z"
-                            except (OSError, ValueError, IndexError):
-                                continue
-                        if not live:
-                            return
-                    await asyncio.sleep(0.02)
-
-            await asyncio.wait_for(
-                wait_for_group() if proc.returncode is not None else proc.wait(),
-                timeout=grace,
-            )
-        except TimeoutError:
-            self.host._append_log(f"{label} did not stop in time — sending SIGKILL")
-            try:
-                os.killpg(proc.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            await proc.wait()
-        self.stopping_pids.discard(proc.pid)
-        return True
+        grace = STOP_GRACE_SECONDS
+        if label == "ARModule":
+            grace = self.host.dimos_stop_grace_seconds
+            if self.manipulation_required:
+                grace += 65
+        return await self.host.process_groups.stop(proc, label, grace)
 
     async def _cancel_task(self, task: asyncio.Task[None] | None) -> None:
         if task is None or task.done() or task is asyncio.current_task():
@@ -1320,79 +1471,9 @@ class RuntimeProcesses:
             processes = (
                 self.backend.process,
                 self.webxr.process,
-                self.host.dependency_process,
+                *self.host.dependency_processes,
             )
-            groups = self.stopping_pids | {p.pid for p in processes if p is not None}
-            roots = self.stopping_pids | {
-                p.pid for p in processes if p is not None and p.returncode is None
-            }
-            group_members: set[int] = set()
-            children: dict[int, list[int]] = {}
-            for entry in Path("/proc").iterdir() if Path("/proc").is_dir() else []:
-                if not entry.name.isdigit():
-                    continue
-                try:
-                    fields = (entry / "stat").read_text().rsplit(")", 1)[1].split()
-                    pid = int(entry.name)
-                    children.setdefault(int(fields[1]), []).append(pid)
-                    if int(fields[2]) in groups:
-                        group_members.add(pid)
-                except (OSError, ValueError, IndexError):
-                    continue
-            if not Path("/proc").is_dir():
-                process = await asyncio.create_subprocess_exec(
-                    "ps", "-axo", "pid=,ppid=,pgid=", stdout=asyncio.subprocess.PIPE
-                )
-                output, _ = await process.communicate()
-                for line in output.decode().splitlines():
-                    fields = line.split()
-                    if len(fields) == 3:
-                        pid, parent, group = map(int, fields)
-                        children.setdefault(parent, []).append(pid)
-                        if group in groups:
-                            group_members.add(pid)
-            owned: list[int] = []
-
-            def collect(pid: int) -> None:
-                if pid in owned:
-                    return
-                owned.append(pid)
-                for child in children.get(pid, []):
-                    collect(child)
-
-            # A worker can outlive its parent and be reparented while still
-            # belonging to the launcher-owned process group.
-            for pid in roots | group_members:
-                collect(pid)
-            self.host._append_log("Force stopping owned runtime processes…")
-            for pid in reversed(owned):
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            deadline = time.monotonic() + 2
-
-            def alive(pid: int) -> bool:
-                try:
-                    return (
-                        Path(f"/proc/{pid}/stat")
-                        .read_text()
-                        .rsplit(")", 1)[1]
-                        .split()[0]
-                        != "Z"
-                    )
-                except (OSError, IndexError):
-                    if Path("/proc").is_dir():
-                        return False
-                    try:
-                        os.kill(pid, 0)
-                        return True
-                    except ProcessLookupError:
-                        return False
-
-            while any(alive(pid) for pid in owned) and time.monotonic() < deadline:
-                await asyncio.sleep(0.02)
-            remaining = [pid for pid in owned if alive(pid)]
+            remaining = await self.host.process_groups.force_stop(processes)
             if remaining:
                 self.update_status(
                     phase=Phase.STOPPING, error=f"Force stop incomplete: {remaining}"
@@ -1414,7 +1495,6 @@ class RuntimeProcesses:
             else:
                 self.host._append_log("No launcher-owned runtime process to stop.")
 
-            self.stopping_pids.clear()
             self.update_status(
                 phase=Phase.READY if self.host.status.check_ok else Phase.IDLE,
                 websocket_url=None,
@@ -1429,16 +1509,12 @@ class RuntimeProcesses:
         *,
         env: dict[str, str],
     ) -> None:
-        self.backend.process = await asyncio.create_subprocess_exec(
-            *argv,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-            cwd=str(self.host.root),
-            env=env,
-            start_new_session=True,
-        )
+        def record(proc: asyncio.subprocess.Process) -> None:
+            self.backend.process = proc
+
+        proc = await _spawn_owned(argv, cwd=self.host.root, env=env, record=record)
         self.backend.reader = asyncio.create_task(
-            self._read_stream(self.backend.process, ready=self.backend.ready)
+            self._read_stream(proc, ready=self.backend.ready)
         )
 
     async def _read_stream(
@@ -1467,7 +1543,7 @@ class RuntimeProcesses:
         error = self.backend.startup_error or (
             None if code == 0 else f"start.sh exited with code {code}"
         )
-        asyncio.create_task(self._finalize_exit(error, expected_proc=proc))
+        await self._finalize_exit(error, expected_proc=proc)
 
     async def _read_webxr_stream(self, proc: asyncio.subprocess.Process) -> None:
         async def on_line(line: str) -> None:
@@ -1525,7 +1601,7 @@ class DependencyOperations:
         self.host = host
         self.operation = OwnedOperation()
         self.check_started = False
-        self.can_setup_running = False
+        self.can_operation = OwnedOperation()
         self.facts = DependencyFacts()
 
     def update_status(self, **changes: Unpack[DependencyUpdate]) -> None:
@@ -1534,25 +1610,31 @@ class DependencyOperations:
         if changes.get("phase") in {Phase.CHECKING, Phase.INSTALLING}:
             self.host.clear_runtime_status()
         old_python = self.facts.dimos_python
-        self.facts = replace(self.facts, **changes)
+        self.facts = replace(self.facts, **cast(DependencyFields, changes))
         if self.facts.dimos_python != old_python:
             self.host.invalidate_planner()
         self.host.publish_status()
 
     async def cancel(self) -> None:
+        await self.can_operation.cancel()
         await self.operation.cancel()
         self.update_status(phase=Phase.READY if self.facts.check_ok else Phase.IDLE)
 
-    async def can_status(self, interface: str = "can0") -> dict[str, Any]:
+    async def can_status(self, interface: str = INTERFACE) -> dict[str, Any]:
         result = (
-            await check_can(interface) if interface != "can0" else await check_can()
+            await check_can(interface) if interface != INTERFACE else await check_can()
         )
         return {**result, "setting_up": self.can_setup_running}
 
-    async def setup_can(self, interface: str = "can0") -> dict[str, Any]:
-        if self.can_setup_running:
-            raise RuntimeError("CAN setup is already running")
+    @property
+    def can_setup_running(self) -> bool:
+        proc = self.can_operation.process
+        return self.can_operation.running or (proc is not None and proc.returncode is None)
+
+    async def setup_can(self, interface: str = INTERFACE) -> dict[str, Any]:
         async with self.host._lock:
+            if self.can_setup_running:
+                raise RuntimeError("CAN setup is already running")
             if (
                 self.host.runtime_running
                 or self.operation.running
@@ -1561,64 +1643,71 @@ class DependencyOperations:
                 raise RuntimeError(
                     "CAN setup is unavailable while DimOS is running. Stop it yourself before configuring CAN."
                 )
-            self.can_setup_running = True
+            task = self.can_operation.start(self._configure_can(interface))
             self.host.publish_status()
-            proc = None
-            try:
-                status = (
-                    await self.can_status(interface)
-                    if interface != "can0"
-                    else await self.can_status()
-                )
-                if status["ready"]:
-                    return {**status, "setting_up": False}
-                python = self.host._selected_python()
-                if not python:
-                    raise ValueError("Select an installed DimOS environment first")
-                argv = (
-                    setup_command(python, interface)
-                    if interface != "can0"
-                    else setup_command(python)
-                )
-                self.host._append_log(
-                    f"Setting up {interface}. Approve the native administrator prompt if shown…"
-                )
-                proc = await asyncio.create_subprocess_exec(
-                    *argv,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.STDOUT,
-                    stdin=asyncio.subprocess.DEVNULL,
-                )
-                out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
-                for line in out.decode(errors="replace").splitlines():
-                    self.host._append_log(line)
-                if proc.returncode:
-                    raise RuntimeError(
-                        "CAN setup was cancelled or failed. See the launcher log."
-                    )
-                verified = (
-                    await check_can(interface)
-                    if interface != "can0"
-                    else await check_can()
-                )
-                if not verified["ready"]:
-                    raise RuntimeError(verified["message"])
-                return {**verified, "setting_up": False}
-            except TimeoutError as exc:
+        try:
+            return await task
+        finally:
+            self.host.publish_status()
+
+    async def _configure_can(self, interface: str) -> dict[str, Any]:
+        proc = None
+        try:
+            status = (
+                await self.can_status(interface)
+                if interface != INTERFACE
+                else await self.can_status()
+            )
+            if status["ready"]:
+                return {**status, "setting_up": False}
+            python = self.host._selected_python()
+            if not python:
+                raise ValueError("Select an installed DimOS environment first")
+            argv = (
+                setup_command(python, interface)
+                if interface != INTERFACE
+                else setup_command(python)
+            )
+            self.host._append_log(
+                f"Setting up {interface}. Approve the native administrator prompt if shown…"
+            )
+            proc = await asyncio.create_subprocess_exec(
+                *argv,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
+            self.can_operation.process = proc
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=120)
+            for line in out.decode(errors="replace").splitlines():
+                self.host._append_log(line)
+            if proc.returncode:
                 raise RuntimeError(
-                    "CAN setup timed out. Dismiss the administrator prompt and retry."
-                ) from exc
-            finally:
-                if proc is not None and proc.returncode is None:
-                    try:
-                        proc.kill()
-                        await asyncio.wait_for(proc.wait(), timeout=2)
-                    except (PermissionError, ProcessLookupError, TimeoutError):
-                        self.host._append_log(
-                            "CAN setup did not exit; dismiss its administrator prompt."
-                        )
-                self.can_setup_running = False
-                self.host.publish_status()
+                    "CAN setup was cancelled or failed. See the launcher log."
+                )
+            verified = (
+                await check_can(interface)
+                if interface != INTERFACE
+                else await check_can()
+            )
+            if not verified["ready"]:
+                raise RuntimeError(verified["message"])
+            return {**verified, "setting_up": False}
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "CAN setup timed out. Dismiss the administrator prompt and retry."
+            ) from exc
+        finally:
+            if proc is not None and proc.returncode is None:
+                try:
+                    proc.kill()
+                    await asyncio.wait_for(proc.wait(), timeout=2)
+                except (PermissionError, ProcessLookupError, TimeoutError):
+                    self.host._append_log(
+                        "CAN setup did not exit; dismiss its administrator prompt."
+                    )
+            if proc is not None and proc.returncode is not None:
+                self.can_operation.process = None
 
     async def ensure_check(self) -> None:
         if self.check_started:
@@ -1638,7 +1727,7 @@ class DependencyOperations:
             raise
 
     def _require_dependency_idle(self) -> None:
-        if self.host.runtime_running or self.operation.running:
+        if self.host.runtime_running or self.operation.running or self.can_setup_running:
             raise RuntimeError("another process is already running")
 
     async def _check_dependencies(self) -> dict[str, Any]:
@@ -1781,11 +1870,13 @@ class PlannerReadiness:
         }
         self.python: str | None = None
         self.checked_at = 0.0
+        self.generation = 0
 
     def snapshot(self) -> dict[str, Any]:
         return dict(self.result)
 
     def invalidate(self) -> None:
+        self.generation += 1
         self.checked_at = 0.0
         self.python = None
         self.result = {
@@ -1797,6 +1888,7 @@ class PlannerReadiness:
     async def query(self, *, force: bool = False) -> dict[str, Any]:
         async with self.lock:
             python = self.host._selected_python()
+            generation = self.generation
             now = asyncio.get_running_loop().time()
             if not force and python == self.python and now - self.checked_at < 30:
                 return self.snapshot()
@@ -1827,6 +1919,8 @@ class PlannerReadiness:
                         "state": "incomplete",
                         "message": f"Planner check failed: {exc}",
                     }
+            if generation != self.generation:
+                return self.snapshot()
             if python != self.host._selected_python():
                 # Selection changed while the subprocess was running. Do not cache
                 # or advertise its result as readiness of the new interpreter.

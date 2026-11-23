@@ -74,6 +74,7 @@ class ManipulationService:
         broadcast: Callable[[str], None],
         on_ready: Callable[[], None] | None = None,
         on_snapshot: Callable[[dict[str, Any]], None] | None = None,
+        on_feedback: Callable[[bool], None] | None = None,
         on_result: Callable[[ManipulationRequest, dict[str, Any]], None] | None = None,
         control_state: Callable[[], tuple[str, int]] | None = None,
         prepare_outbound: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]] | None = None,
@@ -86,6 +87,7 @@ class ManipulationService:
         self._broadcast = broadcast
         self._on_ready = on_ready
         self._on_snapshot = on_snapshot
+        self._on_feedback = on_feedback
         self._on_result = on_result
         self._control_state = control_state
         self._prepare_outbound = prepare_outbound or _unchanged
@@ -463,8 +465,12 @@ class ManipulationService:
     async def _poll_state(self) -> None:
         while not self._closed:
             generation = self._snapshot_generation
+            observed = False
             try:
                 snapshot = await self._rpc.call("ar_manipulation_snapshot")
+                observed = True
+                if generation == self._snapshot_generation and self._on_feedback is not None:
+                    self._on_feedback(snapshot.get("available") is True)
                 snapshot = await self._materialize(snapshot)
                 snapshot = self._map_payload(snapshot)
                 prepared = await self._prepare_outbound({**snapshot, "type": "manipulation_state"})
@@ -479,6 +485,8 @@ class ManipulationService:
                     self._broadcast(encode_text(self._latest_snapshot))
             except Exception as exc:
                 if generation == self._snapshot_generation:
+                    if not observed and self._on_feedback is not None:
+                        self._on_feedback(False)
                     logger.exception("Manipulation observation failed")
                     self._broadcast(
                         encode_text(

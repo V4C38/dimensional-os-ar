@@ -317,7 +317,8 @@ def test_deferred_gripper_uses_the_official_coordinator_bridge():
     from dimos.manipulation.manipulation_module import ManipulationModule
 
     module = runtime()
-    module.config.model = SimpleNamespace(gripper_hardware_id="openyam")
+    module.config.gripper_tasks = {"arm": "openyam_gripper"}
+    module.adapter._group_gripper_task = MethodType(ManipulationModule._group_gripper_task, module.adapter)
     module._resolve_gripper_group = lambda group: SimpleNamespace(id=group)
     module.adapter.config = module.config
     module.adapter._resolve_gripper_group = module._resolve_gripper_group
@@ -631,7 +632,8 @@ def test_source_feedback_clock_is_preserved(monkeypatch):
 
     native = object.__new__(ARManipulationModule)
     native.config = SimpleNamespace(
-        joint_state_aliases={"hardware": "joint"}, model=SimpleNamespace(joint_names=["joint"])
+        joint_state_aliases={"hardware": "joint"}, reversed_feedback_joint_limits={},
+        model=SimpleNamespace(joint_names=["joint"])
     )
     native._adapter = DimOSManipulationAdapter(native)
     parent = Mock()
@@ -963,8 +965,10 @@ def test_failed_hold_rpc_still_latches_session_and_cancels_motion():
 
 def test_resume_refreshes_cached_protection_before_runtime_can_advance():
     from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
+    from dimos.manipulation.manipulation_spec import ExecutionResult, ExecutionStatus
 
-    native = SimpleNamespace(config=SimpleNamespace(), _control_coordinator=Mock(), reset=Mock())
+    native = SimpleNamespace(config=SimpleNamespace(), _control_coordinator=Mock(),
+                             cancel=Mock(return_value=ExecutionResult(ExecutionStatus.NO_EXECUTION)))
     native._control_coordinator.protection_resume.return_value = True
     recovered = {"state": "normal", "effective_speed_scale": 1.0}
     native._control_coordinator.protection_status.return_value = recovered
@@ -975,7 +979,9 @@ def test_resume_refreshes_cached_protection_before_runtime_can_advance():
     module.adapter.protection = adapter.protection
     module.advance()
     module.adapter.set_estop.assert_not_called()
-    native.reset.assert_called_once()
+    native.cancel.assert_called_once()
+    native.cancel.return_value = ExecutionResult(ExecutionStatus.UNCERTAIN, "stop unconfirmed")
+    assert not adapter.reset().succeeded
 
 
 def test_openyam_reset_accepts_fresh_settled_feedback_inside_configured_tolerance(monkeypatch):

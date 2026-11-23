@@ -2,16 +2,22 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
-import time
 from typing import TYPE_CHECKING
 
 import cv2
 import numpy as np
 
 from dimos.ar.localization.transforms import fuse_pose_estimates, normalize_pose_estimate
-from dimos.ar.localization.types import Intrinsics, LocalizedPose, Observation, SnapshotLocalizer
+from dimos.ar.localization.types import (
+    Intrinsics,
+    LocalizedPose,
+    Observation,
+    SnapshotLocalizer,
+    TagResult,
+    TagSighting,
+)
 from dimos.ar.robot.odometry import PoseBuffer, PoseSample
 from dimos.ar.robot.profiles.profile import FiducialMarkerMount
 from dimos.msgs.geometry_msgs.Pose import Pose
@@ -72,6 +78,10 @@ class FiducialMarkerLocalizerConfig:
 class _FiducialCandidate:
     transform: NDArray[np.float64]
     reprojection_error_px: float
+    anchor: NDArray[np.float64]
+    tracking_base: NDArray[np.float64] | None = None
+    robot_pose: PoseSample | None = None
+    capture_ts: float | None = None
 
 
 class FiducialMarkerLocalizer(SnapshotLocalizer):
@@ -83,9 +93,11 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
         dictionary_name: str,
         config: FiducialMarkerLocalizerConfig | None = None,
         allow_latest_robot_pose: bool = False,
+        fixed_base: Pose | None = None,
     ) -> None:
         self._pose_buffer = pose_buffer
         self._allow_latest_robot_pose = allow_latest_robot_pose
+        self._fixed_base = fixed_base
         self._mounts: dict[int, FiducialMarkerMount] = {}
         for mount in marker_mounts:
             if mount.marker_id in self._mounts:
@@ -110,12 +122,21 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
         return result
 
     def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
+        return self.localize_tag(observations).alignment
+
+    def localize_tag(self, observations: Sequence[Observation]) -> TagResult:
         candidates: list[_FiducialCandidate] = []
+        sighting: TagSighting | None = None
+        sighting_has_reference = False
         misses: list[str] = []
-        for observation in observations:
+        for observation in sorted(observations, key=lambda item: item.ts_server):
             candidate = self._candidate_from_observation(observation, misses)
             if candidate is not None:
-                candidates.append(candidate)
+                if candidate.tracking_base is not None:
+                    sighting = TagSighting(matrix_to_pose(candidate.tracking_base), observation.ts_server)
+                    sighting_has_reference = candidate.robot_pose is not None
+                if candidate.robot_pose is not None or candidate.tracking_base is None:
+                    candidates.append(candidate)
 
         if not candidates:
             logger.debug(
@@ -123,10 +144,11 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
                 observations=len(observations),
                 reason=", ".join(misses) if misses else "none",
             )
-            return None
+            return TagResult(None, None, sighting, sighting_has_reference=sighting_has_reference)
 
         fusion = fuse_pose_estimates(
             [candidate.transform for candidate in candidates],
+            anchors=[candidate.anchor for candidate in candidates],
             max_tilt_rad=self._config.max_tilt_rad,
             max_position_residual_m=self._config.max_position_residual_m,
             max_yaw_residual_rad=self._config.max_yaw_residual_rad,
@@ -150,7 +172,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
                 ],
                 max_tilt_deg=round(math.degrees(self._config.max_tilt_rad), 1),
             )
-            return None
+            return TagResult(None, None, sighting, sighting_has_reference=sighting_has_reference)
 
         inliers = [candidates[index] for index in fusion.inlier_indices]
         mean_reproj = float(np.mean([candidate.reprojection_error_px for candidate in inliers]))
@@ -169,10 +191,12 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
             position_spread_m=round(fusion.max_position_residual_m, 4),
             yaw_spread_deg=round(math.degrees(fusion.max_yaw_residual_rad), 2),
         )
-        return LocalizedPose(
-            pose=matrix_to_pose(fusion.transform),
-            frame_id="odom",
-            confidence=confidence,
+        return TagResult(
+            LocalizedPose(matrix_to_pose(fusion.transform), "odom", confidence),
+            inliers[-1].robot_pose,
+            sighting,
+            inliers[-1].capture_ts,
+            sighting_has_reference,
         )
 
     def _candidate_from_observation(
@@ -197,27 +221,25 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
                 f"{observation.intrinsics.width}x{observation.intrinsics.height}"
             )
 
-        robot = self._pose_buffer.at_server_ts(
-            observation.ts_server,
-            max_gap_s=_MAX_ROBOT_POSE_AGE_S,
-            fallback_to_latest=self._allow_latest_robot_pose,
-        )
-
-        if robot is None:
-            misses.append("missing_robot_pose")
-            logger.warning(
-                "fiducial capture has no matching robot pose",
-                **self._pose_buffer.capture_diagnostics(observation.ts_server, now=time.time()),
-            )
-            return None
-
         camera_matrix, dist_coeffs = _intrinsics_to_cv(observation.intrinsics)
         corners_list, ids, _ = self._detector.detectMarkers(gray)
         if ids is None or len(ids) == 0:
             misses.append("no_marker")
             return None
 
-        T_odom_base = _sample_to_matrix(robot)
+        ts = observation.ts_server
+        fixed = self._fixed_base
+        robot = (
+            PoseSample(tuple(fixed.position), tuple(fixed.orientation), ts, ts, "odom")
+            if fixed is not None
+            else self._pose_buffer.at_server_ts(
+                ts, max_gap_s=_MAX_ROBOT_POSE_AGE_S,
+                fallback_to_latest=self._allow_latest_robot_pose,
+            )
+        )
+        T_odom_base = _sample_to_matrix(robot) if robot is not None else None
+        if robot is None:
+            misses.append("missing_robot_pose")
         T_client_camopt = np.asarray(pose_to_matrix(observation.camera_pose), dtype=np.float64)
 
         best: _FiducialCandidate | None = None
@@ -247,7 +269,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
 
         if best is None and saw_mount:
             misses.append("rejected")
-        return best
+        return replace(best, robot_pose=robot, capture_ts=ts) if best is not None else None
 
     def _candidate_from_detection(
         self,
@@ -258,7 +280,7 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
         camera_matrix: NDArray[np.float64],
         dist_coeffs: NDArray[np.float64],
         intrinsics: Intrinsics,
-        T_odom_base: NDArray[np.float64],
+        T_odom_base: NDArray[np.float64] | None,
         T_client_camopt: NDArray[np.float64],
     ) -> _FiducialCandidate | None:
         pose = estimate_marker_pose(
@@ -290,35 +312,35 @@ class FiducialMarkerLocalizer(SnapshotLocalizer):
             return None
 
         T_camopt_marker = _matrix_from_rvec_tvec(rvec, tvec)
-        transform = compose_odom_client(
-            T_odom_base,
-            mount.T_base_marker,
-            T_client_camopt,
-            T_camopt_marker,
-        )
-        if not np.isfinite(transform).all():
+        tracking_marker = T_client_camopt @ T_camopt_marker
+        tracking_base = tracking_marker @ np.linalg.inv(mount.T_base_marker)
+        if not np.isfinite(tracking_base).all():
             return None
-        leveled = normalize_pose_estimate(transform, max_tilt_rad=self._config.max_tilt_rad)
+        transform = (
+            np.linalg.inv(tracking_base)
+            if T_odom_base is None
+            else compose_odom_client(
+                T_odom_base, mount.T_base_marker, T_client_camopt, T_camopt_marker
+            )
+        )
+        anchor = tracking_marker[:3, 3]
+        leveled = normalize_pose_estimate(
+            transform, max_tilt_rad=self._config.max_tilt_rad, anchor=anchor
+        )
         if leveled is None:
             if misses is not None:
                 misses.append("gravity_tilt")
             return None
-        # Gravity removes PnP roll/pitch noise. Preserve the measured marker
-        # center when doing so: retaining the old translation rotates around the
-        # arbitrary tracking origin and can move the marker by tens of cm.
-        odom_marker = T_odom_base @ mount.T_base_marker
-        client_marker = T_client_camopt @ T_camopt_marker
-        leveled[:3, 3] = odom_marker[:3, 3] - leveled[:3, :3] @ client_marker[:3, 3]
         logger.debug(
             "Fiducial transform chain",
             marker_id=mount.marker_id,
-            base_position=T_odom_base[:3, 3].tolist(),
+            base_position=T_odom_base[:3, 3].tolist() if T_odom_base is not None else None,
             mount_position=mount.T_base_marker[:3, 3].tolist(),
             client_camera_position=T_client_camopt[:3, 3].tolist(),
             camera_marker_position=T_camopt_marker[:3, 3].tolist(),
             odom_client_position=leveled[:3, 3].tolist(),
         )
-        return _FiducialCandidate(transform=leveled, reprojection_error_px=reproj)
+        return _FiducialCandidate(leveled, reproj, anchor, tracking_base)
 
 
 def compose_odom_client(

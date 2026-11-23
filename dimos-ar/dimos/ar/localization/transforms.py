@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import combinations
 import math
 from typing import TYPE_CHECKING
 
@@ -49,6 +50,7 @@ def normalize_pose_estimate(
     T: NDArray[np.float64],
     *,
     max_tilt_rad: float,
+    anchor: NDArray[np.float64] | None = None,
 ) -> NDArray[np.float64] | None:
     if max_tilt_rad < 0.0:
         raise ValueError(f"max_tilt_rad must be non-negative, got {max_tilt_rad}")
@@ -63,16 +65,19 @@ def normalize_pose_estimate(
     if up_norm < 1e-9:
         return None
 
-    up_axis /= up_norm
+    up_axis = up_axis / up_norm
     tilt_rad = math.acos(float(np.clip(np.dot(up_axis, _ODOM_UP), -1.0, 1.0)))
-    if tilt_rad > max_tilt_rad:
+    if not np.isfinite(transform).all() or tilt_rad > max_tilt_rad:
         return None
 
     translation = transform[:3, 3]
-    return matrix_from_position_and_yaw(
+    leveled = matrix_from_position_and_yaw(
         (float(translation[0]), float(translation[1]), float(translation[2])),
         yaw_from_transform(transform),
     )
+    if anchor is not None:
+        leveled[:3, 3] += (rotation - leveled[:3, :3]) @ anchor
+    return leveled
 
 
 def fuse_pose_estimates(
@@ -81,19 +86,25 @@ def fuse_pose_estimates(
     max_tilt_rad: float,
     max_position_residual_m: float,
     max_yaw_residual_rad: float,
+    anchors: Sequence[NDArray[np.float64]] | None = None,
 ) -> PoseFusionResult | None:
     if not transforms:
         return None
 
-    normalized = [
-        (index, estimate)
-        for index, T in enumerate(transforms)
-        if (estimate := normalize_pose_estimate(T, max_tilt_rad=max_tilt_rad)) is not None
-    ]
+    if anchors is not None and len(anchors) != len(transforms):
+        raise ValueError("each transform must have one anchor")
+    normalized = []
+    for index, transform in enumerate(transforms):
+        estimate = normalize_pose_estimate(
+            transform, max_tilt_rad=max_tilt_rad, anchor=None if anchors is None else anchors[index]
+        )
+        if estimate is not None:
+            normalized.append((index, estimate))
     if not normalized:
         return None
 
-    positions = np.stack([T[:3, 3] for _, T in normalized], axis=0)
+    reference = np.zeros(3) if anchors is None else anchors[normalized[-1][0]]
+    positions = np.stack([T[:3, :3] @ reference + T[:3, 3] for _, T in normalized])
     yaws = np.array([yaw_from_transform(T) for _, T in normalized], dtype=np.float64)
 
     median_position = np.median(positions, axis=0)
@@ -110,6 +121,27 @@ def fuse_pose_estimates(
         if position_residual <= max_position_residual_m and yaw_residual <= max_yaw_residual_rad:
             keep.append((source_index, transform))
 
+    def agrees(left: int, right: int) -> bool:
+        return (
+            float(np.linalg.norm(positions[left] - positions[right])) <= max_position_residual_m
+            and abs(normalize_angle(yaws[left] - yaws[right])) <= max_yaw_residual_rad
+        )
+
+    if anchors is not None:
+        for size in range(len(normalized), 1, -1):
+            groups = list(combinations(range(len(normalized)), size))
+            group = next(
+                (group for group in reversed(groups)
+                 if all(agrees(a, b) for a, b in combinations(group, 2))),
+                None,
+            )
+            if group is not None:
+                keep = [normalized[index] for index in group]
+                break
+        else:
+            if len(normalized) > 1:
+                return None
+
     if not keep:
         return None
 
@@ -118,7 +150,7 @@ def fuse_pose_estimates(
         max_position_residual = 0.0
         max_yaw_residual = 0.0
     else:
-        kept_positions = np.stack([T[:3, 3] for _, T in keep], axis=0)
+        kept_positions = np.stack([T[:3, :3] @ reference + T[:3, 3] for _, T in keep])
         kept_yaws = np.array([yaw_from_transform(T) for _, T in keep], dtype=np.float64)
         fused_position = np.median(kept_positions, axis=0)
         fused_yaw = math.atan2(
@@ -129,6 +161,7 @@ def fuse_pose_estimates(
             (float(fused_position[0]), float(fused_position[1]), float(fused_position[2])),
             fused_yaw,
         )
+        fused[:3, 3] -= fused[:3, :3] @ reference
         max_position_residual = max(
             float(np.linalg.norm(position - fused_position)) for position in kept_positions
         )

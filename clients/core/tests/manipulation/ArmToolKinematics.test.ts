@@ -8,35 +8,33 @@ const fixture = ARM_FIXTURE;
 const model = fixture.model as ManipulationModel;
 const group = {
   id: "arm",
-  joint_names: Object.keys(fixture.joints).filter((name) =>
-    name.startsWith("yam_joint"),
-  ),
+  joint_names: Object.keys(fixture.joints),
   base_frame: "base",
   tip_frame: "gripper_tip",
   has_gripper: true,
   following: true,
 };
-it("opens OpenYAM fingers toward the lower limits and preserves arm joints", () => {
+it("opens both OpenYAM pads through their one independent finger joint", () => {
   const widths: number[] = [];
   for (const opening of [0, 0.5, 1]) {
     const values = gripperJointValues(model, group, opening);
-    expect(Object.keys(values).sort()).toEqual(["joint7", "joint8"]);
+    expect(Object.keys(values).sort()).toEqual(["arm/joint7"]);
     for (const name of Object.keys(values)) {
       const joint = model.joints.find((j: any) => j.name === name);
       expect(values[name]).toBeCloseTo(
-        joint.limits.upper -
+        joint.limits.lower +
           (joint.limits.upper - joint.limits.lower) * opening,
       );
     }
     const poses = linkPoses(model, { ...fixture.joints, ...values });
     // The finger meshes cross their joint origins. Measure distal pad points,
     // rather than the distance between joint frames (which shrinks as pads open).
-    const left = composePose(poses.tip_left, {
-      position: [0.0239931, -0.0472521, -0.085],
+    const left = composePose(poses.hand_left_finger, {
+      position: [0.084, -0.0454, 0],
       orientation: [0, 0, 0, 1],
     });
-    const right = composePose(poses.tip_right, {
-      position: [-0.0239931, 0.0472521, -0.085],
+    const right = composePose(poses.hand_right_finger, {
+      position: [0.084, 0.0448, 0],
       orientation: [0, 0, 0, 1],
     });
     widths.push(
@@ -45,6 +43,8 @@ it("opens OpenYAM fingers toward the lower limits and preserves arm joints", () 
       ),
     );
   }
+  expect(widths[0]).toBeLessThan(0.01);
+  expect(widths[2]).toBeGreaterThan(0.09);
   expect(widths[0]).toBeLessThan(widths[1]);
   expect(widths[1]).toBeLessThan(widths[2]);
 });

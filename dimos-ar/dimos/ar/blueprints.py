@@ -4,8 +4,7 @@ from dimos.ar.module import ARModule
 from dimos.ar.navigation.native_planner import ARReplanningAStarPlanner
 from dimos.ar.robot.capabilities import blueprint_has_object_detection
 from dimos.ar.robot.profiles.profile import RobotName
-from dimos.core.coordination.blueprints import Blueprint, autoconnect
-from dimos.mapping.relocalization.go2.module import Go2Relocalization
+from dimos.core.coordination.blueprints import Blueprint, MetaBlueprint, autoconnect
 from dimos.navigation.go2.replanning_a_star.module import ReplanningAStarPlanner
 from dimos.protocol.service.system_configurator.clock_sync import ClockSyncConfigurator
 
@@ -22,78 +21,41 @@ except ModuleNotFoundError:
     unitree_go2_agentic = None
 
 
-def _correlated_navigation(blueprint: Blueprint) -> Blueprint:
-    original = next(
-        item for item in blueprint.active_blueprints if item.module is ReplanningAStarPlanner
-    )
-    return autoconnect(
-        blueprint.disabled_modules(ReplanningAStarPlanner),
-        ARReplanningAStarPlanner.blueprint(**original.kwargs),
-    )
+def _go2_ar_blueprint(source: MetaBlueprint, *, agent: bool = False) -> Blueprint:
+    from dimos.ar.robot.go2_retryable_connection import RetryableGo2Connection
+    from dimos.robot.unitree.go2.connection import GO2Connection
 
+    native = source.solidify()
+    native_args = {atom.module: atom.kwargs for atom in native.active_blueprints}
+    replacements = {ReplanningAStarPlanner: ARReplanningAStarPlanner}
+    if agent:
+        from dimos.agents.agent import Agent
+        from dimos.agents.skills.person_follow import PersonFollowSkillContainer
+        from dimos.ar.robot.guarded_agent import ARGuardedAgent, ARPersonFollowSkillContainer
 
-# One worker per active module so ARModule is not GIL-starved by the sensor pipeline.
-# Overrides upstream unitree_go2 n_workers=10.
-_unitree_go2_ar_base = (
-    autoconnect(
-        _correlated_navigation(unitree_go2),
-        Go2Relocalization.blueprint(),
+        replacements.update({
+            Agent: ARGuardedAgent,
+            PersonFollowSkillContainer: ARPersonFollowSkillContainer,
+        })
+    composed = autoconnect(
+        native.disabled_modules(GO2Connection, *replacements),
+        RetryableGo2Connection.blueprint(
+            instance_name=GO2Connection.name, **native_args[GO2Connection]
+        ),
+        *(adapter.blueprint(**native_args[original]) for original, adapter in replacements.items()),
         ARModule.blueprint(
             robot=RobotName.UNITREE_GO2,
-            object_detection=blueprint_has_object_detection(unitree_go2),
+            agent=agent,
+            object_detection=blueprint_has_object_detection(native),
         ),
+    ).solidify()
+    # One worker per active module keeps sensor processing from starving the AR worker.
+    return composed.global_config(n_workers=len(composed.active_blueprints)).configurators(
+        ClockSyncConfigurator()
     )
-    if unitree_go2 is not None
-    else None
-)
 
-unitree_go2_ar = (
-    _unitree_go2_ar_base.global_config(
-        n_workers=len(_unitree_go2_ar_base.active_blueprints),
-    ).configurators(ClockSyncConfigurator())
-    if _unitree_go2_ar_base is not None
-    else None
-)
 
-if unitree_go2_agentic is not None:
-    from dimos.agents.mcp.mcp_client import McpClient
-    from dimos.agents.skills.person_follow import PersonFollowSkillContainer
-    from dimos.ar.robot.guarded_agent import ARGuardedMcpClient, ARPersonFollowSkillContainer
-
-    _native_agent = next(
-        item for item in unitree_go2_agentic.active_blueprints if item.module is McpClient
-    )
-    _native_following = next(
-        item
-        for item in unitree_go2_agentic.active_blueprints
-        if item.module is PersonFollowSkillContainer
-    )
-    _guarded_agentic = autoconnect(
-        unitree_go2_agentic.disabled_modules(McpClient, PersonFollowSkillContainer),
-        ARGuardedMcpClient.blueprint(**_native_agent.kwargs),
-        ARPersonFollowSkillContainer.blueprint(**_native_following.kwargs),
-    )
-else:
-    _guarded_agentic = None
-
-_unitree_go2_ar_agentic_base = (
-    autoconnect(
-        _correlated_navigation(_guarded_agentic),
-        Go2Relocalization.blueprint(),
-        ARModule.blueprint(
-            robot=RobotName.UNITREE_GO2,
-            agent=True,
-            object_detection=blueprint_has_object_detection(unitree_go2_agentic),
-        ),
-    )
-    if _guarded_agentic is not None
-    else None
-)
-
+unitree_go2_ar = _go2_ar_blueprint(unitree_go2) if unitree_go2 is not None else None
 unitree_go2_ar_agentic = (
-    _unitree_go2_ar_agentic_base.global_config(
-        n_workers=len(_unitree_go2_ar_agentic_base.active_blueprints),
-    ).configurators(ClockSyncConfigurator())
-    if _unitree_go2_ar_agentic_base is not None
-    else None
+    _go2_ar_blueprint(unitree_go2_agentic, agent=True) if unitree_go2_agentic is not None else None
 )

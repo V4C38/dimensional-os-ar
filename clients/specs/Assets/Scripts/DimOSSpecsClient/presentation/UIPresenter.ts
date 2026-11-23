@@ -1,7 +1,7 @@
 import type { LocalizationContext, ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
-import { OperatingModeController, localizationCaptureStatus, deriveSessionLinkPhase, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { OperatingModeController, localizationCaptureStatus, deriveSessionLinkPhase, robotConnectionLabel, Go2RecoveryReview, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
 import { deriveRobotMarkerApplyInput, getRobotActivityState, type RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
 
@@ -82,8 +82,8 @@ export class UIPresenter extends BaseScriptComponent {
   private wristMenuController: WristMenuController | null = null;
   private uiState = -1;
   private isEditorMode = false;
+  private readonly go2RecoveryReview = new Go2RecoveryReview();
   private linkPhase: SessionLinkPhase = "disconnected";
-  private unlocalizedUiPrepared = false;
   private setupFlow: SetupFlow | null = null;
   private get setupCompleted(): boolean { return this.setupFlow?.completed ?? false; }
   private stopPressedUntil = 0;
@@ -182,10 +182,9 @@ export class UIPresenter extends BaseScriptComponent {
     const nextPhase = deriveSessionLinkPhase(view);
     this.linkPhase = nextPhase;
     this.setupWizardController?.onSessionViewChanged();
-    if (this.setupCompleted && view.connection === "ready" && view.alignmentRequired && !view.hasTrackingOrigin && !this.isAlignmentReviewPending()) {
-      this.requestAlignmentReview("Robot odometry reference changed");
-    }
 
+    const recovered = this.go2RecoveryReview.observe(view);
+    if (recovered && this.setupCompleted) this.requestAlignmentReview("tracking-loss");
     const transition = sessionLinkTransitionLog(prevPhase, nextPhase);
     if (transition && this.setupCompleted) {
       this.uiLogger.show(
@@ -214,17 +213,7 @@ export class UIPresenter extends BaseScriptComponent {
       view,
       origin,
     });
-    if (input.mode === "unlocalizedFallbackPosition") {
-      if (!this.unlocalizedUiPrepared) {
-        this.prepareMainUiPlacementAnchor();
-        this.unlocalizedUiPrepared = true;
-      }
-    } else {
-      this.unlocalizedUiPrepared = false;
-    }
     deps.robotPresenter.apply(input, {
-      mainUi: this.mainUIFrame,
-      fallbackUniformScale: this.mainUiFallbackScale(),
       debugEnabled: this.debugEnabled,
     });
   }
@@ -243,7 +232,7 @@ export class UIPresenter extends BaseScriptComponent {
       manipulationAvailable: view.capabilities?.manipulation?.available === true,
       manipulationSpeed: deps.manipulationSpeed?.() ?? 0.5,
       manipulationEnabled: deps.manipulationEnabled?.() ?? false,
-      robotConnectionText: { disconnected: "Disconnected", connecting: "Connecting…", robotOffline: "Robot offline", connected: "Connected" }[phase],
+      robotConnectionText: robotConnectionLabel(phase),
       activity: getRobotActivityState(view, { asrRunning: deps.speechController?.asrRunning ?? false, ttsPlaying: deps.tts?.isPlaying ?? false }),
       hudText: this.uiLogger.snapshot?.text ?? "",
       hasTrackingOrigin: view.hasTrackingOrigin,
@@ -407,7 +396,6 @@ export class UIPresenter extends BaseScriptComponent {
     }
     nextAnimationVersion(this.setupWizardPanel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
     this.lidarDisplay?.resetSetup();
-    this.unlocalizedUiPrepared = false;
     this.wristMenuController?.closeImmediate();
     this.setUIState(0, { immediate: true });
     const deps = this.requireDeps();

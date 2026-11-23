@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal, Protocol
 
+from dimos.ar.robot.odometry import PoseSample
 from dimos.msgs.geometry_msgs.Pose import Pose
 
 DistortionModel = Literal["none", "plumb_bob", "equidistant"]
@@ -52,8 +53,25 @@ class Localizer(Protocol):
     def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None: ...
 
 
+@dataclass(frozen=True)
+class TagSighting:
+    pose: Pose
+    ts: float
+
+
+@dataclass(frozen=True)
+class TagResult:
+    alignment: LocalizedPose | None
+    robot_pose: PoseSample | None
+    sighting: TagSighting | None
+    alignment_ts: float | None = None
+    sighting_has_reference: bool = False
+
+
 class SnapshotLocalizer(Localizer, Protocol):
-    def snapshot(self) -> Localizer: ...
+    def snapshot(self) -> SnapshotLocalizer: ...
+
+    def localize_tag(self, observations: Sequence[Observation]) -> TagResult: ...
 
 
 class AsyncLocalizer(Protocol):

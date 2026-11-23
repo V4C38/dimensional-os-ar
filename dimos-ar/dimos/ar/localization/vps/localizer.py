@@ -159,6 +159,7 @@ class VpsLocalizerConfig:
 class _VpsCandidate:
     transform: NDArray[np.float64]
     query_confidence: float
+    anchor: NDArray[np.float64]
 
 
 class VpsLocalizer:
@@ -176,7 +177,7 @@ class VpsLocalizer:
 
     async def localize(self, observations: Sequence[Observation]) -> LocalizedPose | None:
         candidates: list[_VpsCandidate] = []
-        for observation in observations:
+        for observation in sorted(observations, key=lambda item: item.ts_server):
             candidate = await self._candidate_from_observation(observation)
             if candidate is not None:
                 candidates.append(candidate)
@@ -186,6 +187,7 @@ class VpsLocalizer:
 
         fusion = fuse_pose_estimates(
             [candidate.transform for candidate in candidates],
+            anchors=[candidate.anchor for candidate in candidates],
             max_tilt_rad=self._config.max_tilt_rad,
             max_position_residual_m=self._config.max_position_residual_m,
             max_yaw_residual_rad=self._config.max_yaw_residual_rad,
@@ -258,7 +260,9 @@ class VpsLocalizer:
         if not np.isfinite(transform).all():
             return None
 
-        return _VpsCandidate(transform=transform, query_confidence=result.confidence)
+        return _VpsCandidate(
+            transform=transform, query_confidence=result.confidence, anchor=T_client_camopt[:3, 3]
+        )
 
     async def close(self) -> None:
         try:

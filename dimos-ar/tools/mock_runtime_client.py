@@ -223,7 +223,9 @@ async def mock_runtime(url):
                 client.simulated = True
                 model = await client.asset("model", state["model_ref"])
                 assert model["visual_profile"] == "openyam"
-                assert set(model["gripper_joints"]) >= {"joint7", "joint8"}
+                assert set(model["gripper_joints"]) == {"arm/joint7"}
+                assert any(j["name"] == "arm/joint8" and j["mimic"]["joint"] == "arm/joint7"
+                           for j in model["joints"])
                 client.group = state["groups"][0]["id"]
                 await client.wait(lambda: client.safety is not None)
                 if client.safety["stopped"]:

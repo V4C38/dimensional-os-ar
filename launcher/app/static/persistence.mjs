@@ -66,9 +66,10 @@ export class ProfileSettingsEditor {
 
   schedule(readValues) {
     this.cancelScheduled();
+    const values = structuredClone(readValues());
     this.persistTimer = this.timers.setTimeout(() => {
       this.persistTimer = null;
-      void this.save(readValues());
+      void this.save(values);
     }, 400);
   }
 
@@ -85,7 +86,10 @@ export class ProfileSettingsEditor {
 
   saved(profileId, data) {
     const profile = this.robotProfiles.find(item => item.id === profileId);
-    if (profile) profile.settings = { ...profile.settings, ...data };
+    if (!profile) return;
+    for (const key of Object.keys(profile.settings)) {
+      if (Object.hasOwn(data, key)) profile.settings[key] = data[key];
+    }
   }
 }
 
@@ -93,8 +97,9 @@ export class ProfileSettingsEditor {
 export class LauncherPreferences {
   constructor() {
     this.requests = new ScopedRequests();
-    this.values = { go2_source: "auto", openyam_source: "auto", replay: "", openyam_replay: "", openyam_playback: "simulator" };
+    this.values = { go2_source: "auto", openyam_source: "auto", replay: "", openyam_replay: "" };
     this.replayStreams = {};
+    this.recordings = {};
     this.playbackRobot = null;
     this.edited = false;
     this.tail = Promise.resolve();
@@ -106,13 +111,14 @@ export class LauncherPreferences {
       if (typeof preferences[key] === "string") this.values[key] = key.endsWith("_source") && preferences[key] === "simulated" ? "auto" : preferences[key];
     }
     this.replayStreams = structuredClone(preferences.replay_streams || {});
+    this.recordings = structuredClone(preferences.recordings || {});
     this.playbackRobot = null;
     return true;
   }
 
   save(request, manualIp) {
     this.edited = true;
-    const body = JSON.stringify({ ...this.values, replay_streams: this.replayStreams, manual_ip: manualIp });
+    const body = JSON.stringify({ ...this.values, replay_streams: this.replayStreams, recordings: this.recordings, manual_ip: manualIp });
     this.tail = this.tail.catch(() => {}).then(async () => {
       const response = await request(body);
       if (!response.ok) throw new Error("Could not save launcher preferences");

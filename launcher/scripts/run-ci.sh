@@ -109,9 +109,21 @@ run_dimos_ar_job() {
   cd "${DIMOS_AR}"
 
   python -m pip install --upgrade pip
+  if [[ "$(uname -s)" == Linux && "$(uname -m)" == x86_64 ]]; then
+    # The mock Go2 graph imports perception. CI runs on CPU-only hosts.
+    pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.1,<2.8' 'torchvision>=0.16,<0.23'
+  fi
   # Match fresh GitHub dependencies while keeping the reviewed DimOS baseline.
   # CI_DIMOS_REVISION permits explicit compatibility probes against another commit.
-  GIT_LFS_SKIP_SMUDGE=1 pip install --src "${CI_VENV}/src" --upgrade -r "${DIMOS_AR}/requirements-ci.txt" -e "${CI_DIMOS_REQUIREMENT}" -e ".[dev]"
+  GIT_LFS_SKIP_SMUDGE=1 pip install --src "${CI_VENV}/src" --upgrade -r "${DIMOS_AR}/requirements-ci.txt" -e "${CI_DIMOS_REQUIREMENT}" -e ".[dev,unitree,manipulation]"
+
+  # Arm-only installs can omit Go2. The release gate must load both production graphs.
+  python - <<'PY'
+from dimos.ar.blueprints import unitree_go2_ar, unitree_go2_ar_agentic
+
+if unitree_go2_ar is None or unitree_go2_ar_agentic is None:
+    raise SystemExit("The backend gate requires both installed Go2 blueprints.")
+PY
 
   ruff check dimos/ar tools
   mypy dimos/ar
@@ -152,6 +164,7 @@ run_launcher_job() {
   pip install --upgrade -r requirements-dev.txt
 
   ruff check .
+  mypy
   local launcher_test_config
   launcher_test_config="$(mktemp -d "${TMPDIR:-/tmp}/dimos-launcher-ci.XXXXXX")"
   if ! XDG_CONFIG_HOME="${launcher_test_config}" pytest --junitxml="${REVIEW_DATA}/unit/launcher/junit.xml"; then
@@ -177,11 +190,12 @@ run_client_specs_job() {
   npm ci
   npm test
   mkdir -p "${REVIEW_DATA}/unit/specs-tooling"
-  python3 -m unittest discover -s "${LENS_TESTS}/integration-tests" -p 'test_*.py' 2>&1 | tee "${REVIEW_DATA}/unit/specs-tooling/output.log"
+  "$(find_ci_python)" -m unittest discover -s "${LENS_TESTS}/integration-tests" -p 'test_*.py' 2>&1 | tee "${REVIEW_DATA}/unit/specs-tooling/output.log"
 }
 
 run_client_webxr_job() {
   echo "==> client-webxr-tests job (matches .github/workflows/ci.yml)"
+  hydrate_existing_lfs "assets/markers/**"
   cd "${WEBXR_CLIENT}"
   npm ci
   npm test
@@ -196,7 +210,10 @@ run_client_webxr_job() {
   node --test --test-reporter=spec --test-reporter-destination=stdout \
     --test-reporter=junit --test-reporter-destination="${REVIEW_DATA}/unit/integration-tooling/junit.xml" \
     "${ROOT}/tools/integration-tests/integration.test.mjs" "${ROOT}/tools/integration-tests/visual-review.test.mjs"
-  npm run test:integration
+  local launcher_browser_result=0 webxr_browser_result=0
+  npx --no-install playwright test --config launcher.playwright.config.ts || launcher_browser_result=$?
+  npm run test:integration || webxr_browser_result=$?
+  (( launcher_browser_result == 0 && webxr_browser_result == 0 ))
 }
 
 run_timed() {

@@ -22,6 +22,15 @@ The [protocol](dimos-ar/PROTOCOL.md) is canonical: update it, Python protocol, a
 
 CI installs the exact source revision in `.dimos-revision`, rather than relying on package version metadata. Run the official mock manipulation contract before changing that baseline. Declare custom-model gripper joints explicitly; joint type alone does not identify a gripper.
 
+### Small DimOS upstream candidates
+
+The existing planner adapter documents why it uses the installed module initialization with an AR subclass. The OpenYAM integration notes similarly keep the adapter local to this repository. Any upstream cleanup goes in a separate DimOS PR.
+
+- **Go2 connection construction.** Extract the stock `GO2Connection` constructor's connection factory call into a protected method whose default delegates to the same installed factory. This gives the AR adapter an override without duplicating configuration, camera metadata, or lifecycle initialization. Add a test for the default factory and for a subclass-supplied resource. Keep existing native blueprints and startup behavior.
+- **Unitree LAN signaling.** Propose a small change in the WebRTC SDK to give its synchronous LAN HTTP requests explicit connect and read deadlines and expose the failure through the existing signaling API. Verify delayed and failed replies on the existing paths. This alone does not guarantee a hard wall-clock deadline on a trickling response. Keep the local subprocess until cancellation can be proven.
+
+Those interfaces are the small upstream seams. Headset status, AR alignment policy, and the launcher connection list belong in this repository.
+
 ## State and shared behavior
 
 Keep observations recursively readonly, including tuple and array members. Owners may retain stable references; consumers copy only when they need mutable working data. Do not clone whole session views each frame or cast away readonly contracts.

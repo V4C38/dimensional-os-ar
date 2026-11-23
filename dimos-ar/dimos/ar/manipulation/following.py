@@ -11,6 +11,12 @@ import attrs
 import numpy as np
 
 from dimos.ar.manipulation.model import pose_error
+from dimos.ar.manipulation.protection import (
+    OpenYamProtectionSpec,
+    ProtectionSpeed,
+    apply_trajectory_protection,
+)
+from dimos.control.coordinator import ControlCoordinatorConfig
 from dimos.control.tasks.cartesian_ik_task.cartesian_ik_task import (
     CartesianIKTask,
     CartesianIKTaskConfig,
@@ -19,7 +25,7 @@ from dimos.control.tasks.cartesian_ik_task.cartesian_ik_task import (
 from dimos.control.tasks.pose_target_ik import PinkPoseTargetSolver
 from dimos.control.tasks.registry import control_task_registry
 from dimos.core.core import rpc
-from dimos.robot.manipulators.common.coordinators import ArmPoseCoordinator
+from dimos.robot.manipulators.openyam.coordinator import OpenYamCoordinator
 from dimos.utils.logging_config import setup_logger
 
 logger = setup_logger()
@@ -231,18 +237,33 @@ def create_task(cfg: Any, hardware: Any) -> SpeedScaledCartesianIKTask:
         for value in solver.acceleration_limits.values()
     ):
         raise ValueError("Following requires model acceleration limits for every arm joint")
-    from dimos.ar.manipulation.protection import guard_for
-
     task = SpeedScaledCartesianIKTask(cfg.name, config, solver=solver)
-    task.guard = guard_for(hardware)
     task.requested_speed = 0.5
     return task
 
 
-class ARManipulationCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
+class ARManipulationCoordinatorConfig(ControlCoordinatorConfig):  # type: ignore[misc]
+    require_motor_protection: bool = False
+
+
+class ARManipulationCoordinator(OpenYamCoordinator):  # type: ignore[misc]
+    config: ARManipulationCoordinatorConfig
+    _motor_protection: OpenYamProtectionSpec | None = None
+
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         self._stop_once = threading.Lock()
+        self._arm_stop_lock = threading.Lock()
+        self._protection_speed = ProtectionSpeed()
+
+    def _create_task_from_config(self, cfg: Any) -> Any:
+        task = super()._create_task_from_config(cfg)
+        if self.config.require_motor_protection:
+            if cfg.type == "ar_joint_trajectory":
+                apply_trajectory_protection(task, self._protection_speed)
+            elif cfg.type == "ar_cartesian_ik":
+                task.guard = self._protection_speed
+        return task
 
     @rpc  # type: ignore[untyped-decorator]
     def stop(self) -> None:
@@ -251,33 +272,37 @@ class ARManipulationCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
 
     @rpc  # type: ignore[untyped-decorator]
     def set_estop(self, estopped: bool) -> bool:
-        confirmed = True
-        with self._hardware_lock:
-            for connected in self._hardware.values():
-                adapter = getattr(connected, "_wb_adapter", None)
-                hold = getattr(adapter, "hold_current", None)
-                release = getattr(adapter, "release_hold", None)
-                if estopped and callable(hold):
-                    confirmed = hold() and confirmed
-                elif not estopped and callable(release):
-                    release()
-        return bool(super().set_estop(estopped)) and confirmed
+        with self._arm_stop_lock:
+            if not self.config.require_motor_protection:
+                return bool(super().set_estop(estopped))
+            port = self._motor_protection
+            if estopped:
+                # Stop the publisher even if the remote hardware no longer responds.
+                stopped = super().set_estop(True)
+                return bool(stopped and port is not None and port.ar_arm_hold(True))
+            if port is None or not port.ar_arm_hold(False):
+                return False
+            return bool(super().set_estop(False))
 
     @rpc  # type: ignore[untyped-decorator]
     def protection_status(self) -> dict[str, Any]:
-        from dimos.ar.manipulation.protection import guard_for
-
-        guard = guard_for(self._hardware)
-        return guard.snapshot() if guard else {"state": "normal", "effective_speed_scale": 1.0}
+        if not self.config.require_motor_protection:
+            return {"state": "normal", "effective_speed_scale": 1.0}
+        if self._motor_protection is None:
+            raise RuntimeError("Missing OpenYAM motor protection connection")
+        try:
+            status = self._motor_protection.ar_motor_protection()
+            self._protection_speed.scale = float(status["effective_speed_scale"])
+            return status
+        except Exception:
+            self._protection_speed.scale = 0.0
+            raise
 
     @rpc  # type: ignore[untyped-decorator]
     def protection_resume(self) -> bool:
-        import time
-
-        from dimos.ar.manipulation.protection import guard_for
-
-        guard = guard_for(self._hardware)
-        return guard is None or guard.resume(time.monotonic())
+        return not self.config.require_motor_protection or (
+            self._motor_protection is not None and self._motor_protection.ar_resume_motor_protection()
+        )
 
     @rpc  # type: ignore[untyped-decorator]
     def build(self) -> None:
@@ -297,15 +322,6 @@ class ARManipulationCoordinator(ArmPoseCoordinator):  # type: ignore[misc]
                 "set_target",
             ],
         )
-        from dimos.hardware.whole_body.registry import whole_body_adapter_registry
-
-        if any(c.adapter_type == "openyam_damiao" for c in self.config.hardware):
-            from dimos.ar.manipulation.protected_hardware import ProtectedOpenYamAdapter
-
-            whole_body_adapter_registry.register("ar_openyam_protected", ProtectedOpenYamAdapter)
-        for component in self.config.hardware:
-            if component.adapter_type == "openyam_damiao":
-                component.adapter_type = "ar_openyam_protected"
         control_task_registry.register_path(
             "ar_joint_trajectory", "dimos.ar.manipulation.protection:create_trajectory_task"
         )

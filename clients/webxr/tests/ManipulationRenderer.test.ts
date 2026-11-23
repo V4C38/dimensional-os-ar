@@ -345,7 +345,7 @@ it("shows movement-weighted 3D links without arm boxes", () => {
     };
     const solution = {
       ...fixture.joints,
-      yam_joint6: fixture.joints.yam_joint6 + 0.8,
+      "arm/yam_joint6": fixture.joints["arm/yam_joint6"] + 0.8,
     };
     const target = {
       ...pose,
@@ -358,12 +358,12 @@ it("shows movement-weighted 3D links without arm boxes", () => {
     } as any;
     applyRenderer(r, { state: arm, selected: false, target, solution, now: 1, robotTitle: "OpenYAM", snapshot: intent });
     const models = (r as any).modelRenderer;
-    const moving = models.previewMeshes.get("gripper") as THREE.Mesh;
-    const stationary = models.previewMeshes.get("link2") as THREE.Mesh;
+    const moving = models.previewMeshes.get("hand") as THREE.Mesh;
+    const stationary = models.previewMeshes.get("arm_link_2") as THREE.Mesh;
     expect(moving.visible).toBe(true);
     expect((moving.material as THREE.ShaderMaterial).uniforms.uOpacity.value).toBeGreaterThan(0);
     expect(Array.from(stationary.geometry.getAttribute("armAlpha").array).every(value => value === 0)).toBe(true);
-    expect(r.object.getObjectByName("LinkBounds_link3")).toBeUndefined();
+    expect(r.object.getObjectByName("LinkBounds_arm_link_3")).toBeUndefined();
     rejection = { revision: 1, pose: target, message: "IK failed" };
     applyRenderer(r, { state: arm, selected: false, target, solution, now: 1.1, status: "IK failed", robotTitle: "OpenYAM", snapshot: intent });
     expect(

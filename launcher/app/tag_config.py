@@ -100,7 +100,7 @@ def normalize_ui_mount(raw: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def normalize_ui_mounts(raw: list[dict[str, Any]] | None) -> list[dict[str, Any]]:
-    mounts = [normalize_ui_mount(item) for item in (raw or [DEFAULT_MOUNT])]
+    mounts = [normalize_ui_mount(item) for item in ([DEFAULT_MOUNT] if raw is None else raw)]
     ids = [mount["marker_id"] for mount in mounts]
     if len(ids) != len(set(ids)):
         raise ValueError("fiducial marker IDs must be unique")
@@ -209,7 +209,7 @@ def ui_from_armodule_config(
             if not isinstance(item, dict):
                 raise TypeError("fiducial_marker_mounts items must be objects")
             mounts.append(wire_to_ui_mount(item))
-    if not mounts:
+    else:
         mounts = [normalize_ui_mount(default_mount or DEFAULT_MOUNT)]
     return {
         "fiducial_marker": fiducial_marker,
@@ -226,11 +226,11 @@ def ui_from_armodule_config(
 
 
 def merge_armodule_settings(
-    existing: dict[str, Any], settings: dict[str, Any]
+    existing: dict[str, Any], settings: dict[str, Any], *, default_mount: dict[str, Any] | None = None
 ) -> dict[str, Any]:
     """Update one profile without replacing unrelated nested localization policy."""
     result = copy.deepcopy(existing)
-    prior = ui_from_armodule_config(existing)
+    prior = ui_from_armodule_config(existing, default_mount=default_mount)
     enabled = settings.get("fiducial_marker", prior["fiducial_marker"])
     patch = armodule_config_from_ui(
         fiducial_marker=enabled,
@@ -247,6 +247,8 @@ def merge_armodule_settings(
     )
     result.update(patch)
     result["localization"] = localization
-    if not enabled:
-        result["fiducial_marker_mounts"] = None
+    if not enabled and "mounts" in settings:
+        result["fiducial_marker_mounts"] = [
+            ui_mount_to_wire(mount) for mount in normalize_ui_mounts(settings["mounts"])
+        ]
     return result

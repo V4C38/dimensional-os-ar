@@ -7,7 +7,7 @@ poses; camera/extrinsic composition stays in the existing numerical localizers.
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 import math
@@ -18,22 +18,24 @@ from uuid import uuid4
 import numpy as np
 
 from dimos.ar.async_execution import BoundedWorker
-from dimos.ar.localization.transforms import normalize_pose_estimate
+from dimos.ar.localization.transforms import fuse_pose_estimates, normalize_pose_estimate
 from dimos.ar.localization.types import (
     AsyncLocalizer,
     LocalizedPose,
     Observation,
     SnapshotLocalizer,
+    TagSighting,
 )
 from dimos.ar.localization.vps.admission import QueryDeferredError, VpsAdmission
 from dimos.ar.localization.vps.robot_observation_buffer import RobotObservationBuffer
 from dimos.ar.numeric import quaternion_yaw
-from dimos.ar.robot.odometry import RobotOdometry
+from dimos.ar.robot.odometry import PoseSample, RobotOdometry
 from dimos.ar.spatial import FrameSnapshot, Matrix, frozen_matrix
 from dimos.ar.websocket.protocol import (
     LocalizationCaptureProgress,
     LocalizationTracking,
     TimeSync,
+    base_sighting_payload,
     encode_text,
 )
 from dimos.utils.logging_config import setup_logger
@@ -93,6 +95,8 @@ class CaptureEpisode:
     travel_m: float = 0.0
     gate_deadline: float | None = None
     frames: FrameSnapshot | None = None
+    ungated: bool = False
+    sighting_only: bool = False
 
 
 @dataclass
@@ -145,12 +149,18 @@ class LocalizationCoordinator:
         self._clients: OrderedDict[str, Client] = OrderedDict()
         self._issued: OrderedDict[str, Alignment] = OrderedDict()
         self._jobs: set[asyncio.Task[None]] = set()
+        self._tag_jobs: set[asyncio.Task[None]] = set()
         self._cloud_task: asyncio.Task[None] | None = None
         self._poll_task: asyncio.Task[None] | None = None
         self._robot_travel: float | None = None
         self._robot_heading: float | None = None
         self._robot_retry = 0.0
         self._robot_ts = -math.inf
+        self._robot_queries: deque[tuple[Observation, LocalizedPose, FrameSnapshot]] = deque(
+            maxlen=3
+        )
+        self._last_robot_query_ts = -math.inf
+        self._tag_constraint: tuple[str, Alignment] | None = None
         self._native_ts = -math.inf
         self._closed = False
 
@@ -244,6 +254,17 @@ class LocalizationCoordinator:
         if self._vps is not None:
             await self._vps.close()
 
+    def retire_pending(self) -> None:
+        for task in self._jobs - self._tag_jobs:
+            task.cancel()
+        for key, client in self._clients.items():
+            episode = client.episode
+            if episode is not None and episode.purpose == "robot":
+                episode.sighting_only = True
+            else:
+                self._finish(key, "deferred", "robot_link_lost")
+        self._robot_queries.clear()
+
     def reset(self) -> None:
         for task in tuple(self._jobs):
             task.cancel()
@@ -252,7 +273,9 @@ class LocalizationCoordinator:
         self._frames = FrameSnapshot.initial(self._odometry.reference_id)
         self._vps_adopted = False
         self._robot_travel = self._robot_heading = None
-        self._robot_ts = self._native_ts = -math.inf
+        self._robot_ts = self._native_ts = self._last_robot_query_ts = -math.inf
+        self._robot_queries.clear()
+        self._tag_constraint = None
         self._robot_retry = 0.0
 
     def connect(self, client_id: str) -> None:
@@ -264,10 +287,16 @@ class LocalizationCoordinator:
 
     def manual(self, client_id: str) -> None:
         client = self._clients.get(client_id)
-        if client is not None and client.episode is None:
-            client.manual = True
-            client.retry_at = 0.0
-            self._robot_retry = 0.0
+        if client is None:
+            return
+        client.manual = True
+        client.retry_at = 0.0
+        self._robot_retry = 0.0
+        episode = client.episode
+        if self._marker is not None and client.reference and (
+            episode is None or (not episode.ungated and episode.phase in ("requested", "waiting"))
+        ):
+            self._request(client_id, client, "robot", ungated=True)
 
     def on_goal_reached(self, *, succeeded: bool) -> None:
         if succeeded:
@@ -344,7 +373,7 @@ class LocalizationCoordinator:
             return
         episode.phase = "processing"
         if episode.purpose == "robot":
-            self._spawn(self._tag(client_id, client, episode, tuple(observations)))
+            self._tag_jobs.add(self._spawn(self._tag(client_id, client, episode, tuple(observations))))
         elif self._cloud_task is None or self._cloud_task.done():
             self._cloud_task = self._spawn(self._headset(client_id, client, episode, newest))
         else:
@@ -359,6 +388,7 @@ class LocalizationCoordinator:
 
     def _done(self, task: asyncio.Task[None]) -> None:
         self._jobs.discard(task)
+        self._tag_jobs.discard(task)
         if not task.cancelled() and task.exception() is not None:
             logger.error("localization task failed", error=type(task.exception()).__name__)
 
@@ -469,13 +499,14 @@ class LocalizationCoordinator:
             self._launch_robot()
 
     def _request(
-        self, key: str, client: Client, purpose: Literal["robot", "headset"]
+        self, key: str, client: Client, purpose: Literal["robot", "headset"],
+        *, ungated: bool = False,
     ) -> CaptureEpisode:
-        deadline = self._clock() + (
-            max(0.25, self._preference) if purpose == "robot" else self._timeout
-        )
+        preferred = purpose == "robot" and not ungated
+        deadline = self._clock() + (max(0.25, self._preference) if preferred else self._timeout)
         episode = CaptureEpisode(
-            uuid4().hex, purpose, deadline, gate_deadline=deadline if purpose == "robot" else None
+            uuid4().hex, purpose, deadline, gate_deadline=deadline if preferred else None,
+            ungated=ungated,
         )
         client.episode = episode
         self._clients.move_to_end(key)
@@ -484,15 +515,17 @@ class LocalizationCoordinator:
             "episode_id": episode.id,
             "purpose": purpose,
             "result_timeout_s": self._timeout + 3,
-            "capture_policy": "robot_los_preferred" if purpose == "robot" else "any_angle",
+            "capture_policy": "robot_los_preferred" if preferred else "any_angle",
             "observation_count": 3 if purpose == "robot" else 1,
         }
-        if purpose == "robot":
+        if preferred:
             payload["wait_timeout_s"] = self._preference
         self._emit(key, payload)
         return episode
 
-    def _finish(self, key: str, status: str, reason: str) -> None:
+    def _finish(
+        self, key: str, status: str, reason: str, *, sighting: TagSighting | None = None
+    ) -> None:
         client = self._clients.get(key)
         if client is None or client.episode is None:
             return
@@ -507,6 +540,8 @@ class LocalizationCoordinator:
                 "status": status,
                 "reason": reason,
                 **({"ts": episode.capture_ts} if episode.capture_ts is not None else {}),
+                **({"base_sighting": base_sighting_payload(sighting, client.reference)}
+                   if sighting is not None else {}),
             },
         )
         client.episode = None
@@ -538,8 +573,9 @@ class LocalizationCoordinator:
         source: Source,
         confidence: float,
         ts: float,
+        robot_pose: PoseSample | None = None,
     ) -> None:
-        pose = self._odometry.history.at_server_ts(
+        pose = robot_pose or self._odometry.history.at_server_ts(
             ts, fallback_to_latest=self._allow_latest_robot_pose
         )
         if pose is None:
@@ -583,10 +619,24 @@ class LocalizationCoordinator:
         finally:
             self._admission.capture_ts.reset(token)
 
+    def _has_tag_constraint(self) -> bool:
+        if self._tag_constraint is None:
+            return False
+        key, alignment = self._tag_constraint
+        client = self._clients.get(key)
+        return (
+            client is not None
+            and client.alignment is alignment
+            and client.reference == alignment.tracking_reference_id
+            and alignment.odom_reference_id == self._odometry.reference_id
+            and client.travel_m - alignment.travel_m < self._headset_distance
+        )
+
     def _launch_robot(self) -> None:
         if (
             self._vps is None
             or not self._robot_due()
+            or self._has_tag_constraint()
             or self._clock() < self._robot_retry
             or self._admission.delay() > 0
             or (self._cloud_task is not None and not self._cloud_task.done())
@@ -665,22 +715,62 @@ class LocalizationCoordinator:
             if sample is None or sample.source_generation != generation:
                 self._robot_retry = self._clock() + 2
                 return
+            observation = sample.observation
+            ts = observation.ts_server
             snapshot = sample.frames or self._frames
-            pose = self._odometry.history.at_image_ts(sample.observation.ts_server)
-            if pose is None:
+            pose = self._odometry.history.at_image_ts(ts)
+            if ts <= self._last_robot_query_ts or pose is None:
                 self._robot_retry = self._clock() + 2
                 return
             async with asyncio.timeout(self._timeout):
-                localized = await self._query(sample.observation)
-            if generation != self._odometry.generation:
+                localized = await self._query(observation)
+            if generation != self._odometry.generation or self._has_tag_constraint():
                 return
-            if localized is None or not self._commit_robot(
-                localized,
-                ts=sample.observation.ts_server,
+            self._last_robot_query_ts = ts
+            if localized is None or localized.frame_id != "map" or localized.confidence < 0.5:
+                self._robot_retry = self._clock() + 2
+                return
+
+            self._robot_queries.append((observation, localized, snapshot))
+            comparable = [
+                (capture, result) for capture, result, frames in self._robot_queries
+                if frames.odom_reference_id == snapshot.odom_reference_id
+                and frames.native_map_id == snapshot.native_map_id
+            ]
+            fit = fuse_pose_estimates(
+                [np.asarray(pose_to_matrix(result.pose), dtype=np.float64)
+                 for _, result in comparable],
+                anchors=[np.asarray(pose_to_matrix(capture.camera_pose), dtype=np.float64)[:3, 3]
+                         for capture, _ in comparable],
+                max_tilt_rad=math.radians(5),
+                max_position_residual_m=0.35,
+                max_yaw_residual_rad=math.radians(12),
+            )
+            if (
+                fit is None or len(fit.inlier_indices) < 2
+                or fit.inlier_indices[-1] != len(comparable) - 1
+            ):
+                self._robot_retry = self._clock() + 2
+                return
+            contributing = [comparable[index] for index in fit.inlier_indices]
+            if self._commit_robot(
+                LocalizedPose(
+                    matrix_to_pose(fit.transform),
+                    "map",
+                    min(result.confidence for _, result in contributing),
+                ),
+                ts=ts,
                 travel=sample.travel_m,
                 heading=quaternion_yaw(pose.orientation),
                 snapshot=snapshot,
             ):
+                self._robot_queries.clear()
+                logger.info(
+                    "robot VPS correction committed",
+                    capture_times=[capture.ts_server for capture, _ in contributing],
+                    odom_reference_id=snapshot.odom_reference_id,
+                )
+            else:
                 self._robot_retry = self._clock() + 2
         except QueryDeferredError as exc:
             self._robot_retry = self._clock() + max(0.25, min(2, exc.retry_after_s))
@@ -764,12 +854,23 @@ class LocalizationCoordinator:
             assert self._marker is not None
             marker = self._marker.snapshot()
             async with asyncio.timeout(self._timeout):
-                localized = await self._worker.run(lambda: marker.localize(observations))
-            if not self._current(
+                result = await self._worker.run(lambda: marker.localize_tag(observations))
+            if (
+                self._clients.get(key) is not client
+                or client.episode is not episode
+                or client.reference != reference
+                or not self._active(client)
+            ):
+                return
+            if episode.sighting_only or not self._current(
                 key, client, episode, generation, reference, snapshot.shared_frame_id
             ):
-                if client.episode is episode:
-                    client.episode = None
+                self._finish(key, "deferred", "reference_changed", sighting=result.sighting)
+                return
+            localized = result.alignment
+            if localized is None and result.sighting is not None and not result.sighting_has_reference:
+                self._finish(key, "deferred", "capture_pose_unavailable", sighting=result.sighting)
+                client.retry_at = self._clock() + 2
                 return
             if localized is None:
                 self._finish(key, "deferred", "tag_unavailable")
@@ -779,7 +880,9 @@ class LocalizationCoordinator:
                 return
             if localized.frame_id != "odom":
                 raise ValueError("marker reference must be odom")
-            ts = max(item.ts_server for item in observations)
+            assert result.robot_pose is not None
+            assert result.alignment_ts is not None
+            ts = result.alignment_ts
             odom_tracking = np.asarray(pose_to_matrix(localized.pose), dtype=np.float64)
             if (
                 baseline is not None
@@ -798,12 +901,8 @@ class LocalizationCoordinator:
                 before = self._frames
                 if ts > self._robot_ts and before.native_map_id == snapshot.native_map_id:
                     self._robot_ts = ts
-                    pose = self._odometry.history.at_server_ts(
-                        ts, fallback_to_latest=self._allow_latest_robot_pose
-                    )
-                    if pose is not None:
-                        self._robot_travel = pose.travel_m
-                        self._robot_heading = quaternion_yaw(pose.orientation)
+                    self._robot_travel = result.robot_pose.travel_m
+                    self._robot_heading = quaternion_yaw(result.robot_pose.orientation)
                     composed = (
                         upper @ before.T_native_odom if before.T_native_odom is not None else upper
                     )
@@ -817,8 +916,12 @@ class LocalizationCoordinator:
                             confidence=min(baseline.confidence, localized.confidence),
                         )
                     )
-                self._finish(key, "succeeded", "tag_aligned")
-                client.manual = False
+                    self._tag_constraint = (key, baseline)
+                    self._robot_queries.clear()
+                    self._finish(key, "succeeded", "tag_aligned")
+                    client.manual = False
+                else:
+                    self._finish(key, "deferred", "reference_changed")
             else:
                 self._issue(
                     key,
@@ -828,6 +931,7 @@ class LocalizationCoordinator:
                     "tag",
                     localized.confidence,
                     ts,
+                    result.robot_pose,
                 )
         except Exception as exc:
             logger.warning("tag localization failed", error=type(exc).__name__, exc_info=True)

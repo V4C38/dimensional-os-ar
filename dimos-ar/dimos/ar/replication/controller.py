@@ -41,7 +41,6 @@ class InteractionPorts:
     """Explicit host effects and observed availability; never a module back-reference."""
 
     capabilities: Callable[[], CapabilitySet]
-    mapping_restart_required: Callable[[], bool]
     manipulation: Callable[[], ManipulationService | None]
     agent_control: Callable[[], ARAgentControlSpec | None]
     agent_idle: Callable[[], bool]
@@ -243,9 +242,11 @@ class InteractionController:
         if request.action == "takeover":
             if self._state.takeover_pending(client_id, request.request_id):
                 return
-            if (not self._ports.capabilities().supports(CapabilityName.AGENT)
-                    or not self._ports.capabilities().supports_navigation(NAV_GOAL)
-                    or self._ports.mapping_restart_required()):
+            capabilities = self._ports.capabilities()
+            if (
+                not capabilities.supports(CapabilityName.AGENT)
+                or not capabilities.supports_navigation(NAV_GOAL)
+            ):
                 self._interaction_reply(request, client_id, "rejected", "navigation_unavailable")
                 return
             if self.mode_task is not None or self._native_mode_uncertain:
@@ -306,7 +307,6 @@ class InteractionController:
                 if request.kind is not None and request.kind.startswith("manipulation_")
                 else CapabilityName.NAVIGATION
             )
-            or self._ports.mapping_restart_required()
         ):
             reply = {
                 "type": "interaction_result",
@@ -534,7 +534,6 @@ class InteractionController:
             self._closed
             or self._ports.operation_stopped()
             or not self._ports.capabilities().supports_navigation(NAV_GOAL)
-            or self._ports.mapping_restart_required()
         ):
             return
         if msg.preview:

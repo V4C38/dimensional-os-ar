@@ -89,14 +89,15 @@ class ARReplanningAStarPlanner(ReplanningAStarPlanner):  # type: ignore[misc]
         # The upstream constructor only initializes Module and its planner. Use
         # the same configuration with our subclass, without editing upstream.
         Module.__init__(self, **kwargs)
-        overrides = {name: value for name, value in (
-            ("robot_width", self.config.robot_width),
-            ("robot_rotation_diameter", self.config.robot_rotation_diameter),
-        ) if value is not None}
-        config = self.config.g.model_copy(update=overrides) if overrides else self.config.g
         self._ar_fence = NavigationControlFence()
-        self._planner = ARGlobalPlanner(self._emit_navigation_status, config,
-                                        control_fence=self._ar_fence)
+        self._planner = ARGlobalPlanner(
+            self._emit_navigation_status,
+            control_fence=self._ar_fence,
+            robot_width=self.config.robot_width,
+            robot_rotation_diameter=self.config.robot_rotation_diameter,
+            nerf_speed=self.config.nerf_speed,
+            simulation=bool(self.config.g.simulation),
+        )
         self.nav_cmd_vel = _NavigationVelocityOutput(self, self._ar_fence)
         self._ar_watchdog_stop = threading.Event()
         self._ar_watchdog: threading.Thread | None = None

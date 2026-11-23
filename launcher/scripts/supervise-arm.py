@@ -119,6 +119,16 @@ async def prepare_shutdown() -> None:
 
 async def main(command: list[str]) -> int:
     child = await asyncio.create_subprocess_exec(*command, start_new_session=True)
+    if sys.platform == "darwin" and os.environ.get("DIMOS_AR_LAUNCHER_KEEP_AWAKE") == "1":
+        try:
+            asyncio.create_task((await asyncio.create_subprocess_exec(
+                "/usr/bin/caffeinate", "-i", "-w", str(child.pid),
+                stdin=asyncio.subprocess.DEVNULL,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )).wait())
+        except OSError as exc:
+            print(f"Idle sleep inhibition unavailable: {exc}", file=sys.stderr, flush=True)
     requested = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -134,19 +144,21 @@ async def main(command: list[str]) -> int:
             await asyncio.gather(parking, return_exceptions=True)
             stopping.cancel()
             return child.returncode or 0
-        await parking
         try:
-            os.killpg(child.pid, signal.SIGINT)
-        except ProcessLookupError:
-            pass
-        try:
-            await asyncio.wait_for(asyncio.shield(exited), 60)
-        except TimeoutError:
-            print(
-                "DimOS shutdown timed out; terminating its process group.", flush=True
-            )
-            os.killpg(child.pid, signal.SIGKILL)
-            await exited
+            await parking
+        finally:
+            try:
+                os.killpg(child.pid, signal.SIGINT)
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(asyncio.shield(exited), 60)
+            except TimeoutError:
+                print(
+                    "DimOS shutdown timed out; terminating its process group.", flush=True
+                )
+                os.killpg(child.pid, signal.SIGKILL)
+                await exited
     stopping.cancel()
     return child.returncode or 0
 

@@ -323,7 +323,7 @@ export class ReviewScenario extends BaseScriptComponent {
       this.check("manipulation_material", !!mesh && Number.isFinite(mesh.material.mainPass.opacityScale) && arm.renderer.edges.size > 0);
       this.check("manipulation_stroke_width", Math.abs(arm.renderer.path.material.mainPass.nearWidthScale - 0.75) < 0.0001);
       this.check("manipulation_pose", handle.getTransform().getWorldPosition().distance(new vec3(...clientTrackingToSpecsPose(mapToClientTrackingPose(ARM_FIXTURE.pose as any, root.clientTrackingOriginStore.T_map_tracking)).position)) < 0.01);
-      this.check("manipulation_gripper_meshes", ["gripper", "tip_left", "tip_right"].every(link => arm.renderer.picks.get(link)?.enabled === true));
+      this.check("manipulation_gripper_meshes", ["hand", "hand_left_finger", "hand_right_finger"].every(link => arm.renderer.picks.get(link)?.enabled === true));
       root.selection.setSelected(true); this.scene("manipulation_target");
     } else if (this.phase === 1) {
       this.outlineUploadStart = [...arm.renderer.edges.values()].reduce((n: number, edge: any) => n + edge.stroke.geometryUploads, 0);

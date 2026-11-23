@@ -1,7 +1,7 @@
 import { mapToClientTrackingPose, rotateVecByQuat, type ClientTrackingOrigin } from "../localization/ClientTracking";
 import type { ARModuleSessionState } from "../websocket/ARModuleSession";
 import { deriveSessionLinkPhase, NO_ROBOT_CONNECTED_LABEL } from "../presentation/ControlPanelPresentation";
-import type { Pose, RobotDescription, ReadonlyFacts, Vec3, Quat } from "../ClientContracts";
+import type { BaseSighting, Pose, RobotDescription, ReadonlyFacts, Vec3, Quat } from "../ClientContracts";
 
 /** The single robot selection owner. Views receive facts; hover never changes selection. */
 export class RobotSelection {
@@ -30,12 +30,7 @@ export type RobotActivityState = "Stopped" | "Idle" | "Following Path" | "Thinki
 
 export type RobotMarkerApplyInput =
   | { mode: "hidden" }
-  | { mode: "localizedPending" }
-  | {
-      mode: "unlocalizedFallbackPosition";
-      robot: ReadonlyFacts<RobotDescription> | null;
-      view: ARModuleSessionState;
-    }
+  | { mode: "lastSeen"; robot: ReadonlyFacts<RobotDescription>; sighting: ReadonlyFacts<BaseSighting> }
   | {
       mode: "localizedOdom";
       robot: ReadonlyFacts<RobotDescription>;
@@ -49,25 +44,18 @@ export function deriveRobotMarkerApplyInput(input: {
   view: ARModuleSessionState;
   origin: ReadonlyFacts<ClientTrackingOrigin> | null;
 }): RobotMarkerApplyInput {
-  if (!input.setupCompleted || input.view.capabilities?.navigation.available !== true) {
-    return { mode: "hidden" };
+  const { view, origin } = input;
+  const robot = view.hello?.robot;
+  if (!robot) return { mode: "hidden" };
+  if (view.baseSighting && (!origin || !view.pose || view.robotTelemetry === "unavailable" ||
+      view.baseSighting.ts > view.pose.ts)) {
+    return { mode: "lastSeen", robot, sighting: view.baseSighting };
   }
-  const robot = input.view.hello?.robot;
-  if (input.origin && input.view.hasTrackingOrigin && input.view.pose && robot) {
-    return {
-      mode: "localizedOdom",
-      robot,
-      pose: input.view.pose,
-      origin: input.origin,
-      view: input.view,
-    };
+  if (input.setupCompleted && view.capabilities?.navigation.available && origin &&
+      view.hasTrackingOrigin && view.pose && view.robotTelemetry !== "unavailable") {
+    return { mode: "localizedOdom", robot, pose: view.pose, origin, view };
   }
-  if (input.origin || input.view.hasRetainedTrackingOrigin || input.view.alignmentRequired) return { mode: "localizedPending" };
-  return {
-    mode: "unlocalizedFallbackPosition",
-    robot: robot ?? null,
-    view: input.view,
-  };
+  return { mode: "hidden" };
 }
 
 export function getRobotActivityState(view: ARModuleSessionState, voice?: { ttsPlaying: boolean; asrRunning: boolean }): RobotActivityState {

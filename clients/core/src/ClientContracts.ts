@@ -101,6 +101,12 @@ export interface AgentState {
 }
 
 export interface State {
+  robot_link?: {
+    status: "waiting" | "online" | "offline";
+    source_generation: number;
+    motion_ready: boolean;
+    reason: string | null;
+  };
   safety?: { stopped: boolean; can_resume: boolean; stop_id?: string };
   playback?: { state: "playing" | "ended"; elapsed_s: number; duration_s: number };
   nav_preview_costmap_ts?: number;
@@ -141,7 +147,14 @@ export interface LocalizationContext extends SharedFrameContext {
   reset?: boolean;
   rebase?: { previous_shared_frame_id: string; position: Vec3; orientation: Quat };
 }
+export interface BaseSighting {
+  position: Vec3;
+  orientation: Quat;
+  ts: number;
+  tracking_reference_id: string;
+}
 export interface LocalizationStatus {
+  base_sighting?: BaseSighting;
   type: "localization_status";
   odom_reference_id: string;
   shared_frame_id: string;
@@ -187,6 +200,7 @@ export interface LocalizationResult {
 
 export interface Pose {
   type: "pose";
+  source_generation?: number;
   position: Vec3;
   orientation: Quat;
   ts: number;

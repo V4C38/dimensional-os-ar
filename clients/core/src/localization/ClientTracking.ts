@@ -1,4 +1,4 @@
-import type { LocalizationResult, LocalizationContext, SharedFrameContext, Quat, Vec3, YawPose, CaptureGeometry, ReadonlyFacts } from "../ClientContracts";
+import type { BaseSighting, LocalizationResult, LocalizationContext, SharedFrameContext, Quat, Vec3, YawPose, CaptureGeometry, ReadonlyFacts } from "../ClientContracts";
 
 /** This client's tracking origin expressed in the shared map. */
 export interface ClientTrackingOrigin extends SharedFrameContext {
@@ -15,11 +15,27 @@ export class ClientTrackingOriginStore {
   private current: ReadonlyFacts<ClientTrackingOrigin> | null = null;
   private context: ReadonlyFacts<LocalizationContext> | null = null;
   private trackingReference = "";
+  private sighting: ReadonlyFacts<BaseSighting> | null = null;
+
+  get baseSighting(): ReadonlyFacts<BaseSighting> | null { return this.sighting; }
+
+  recordBaseSighting(sighting: ReadonlyFacts<BaseSighting>): void {
+    if (sighting.tracking_reference_id !== this.trackingReference ||
+        (this.sighting && sighting.ts <= this.sighting.ts)) return;
+    this.sighting = sighting;
+  }
+
+  retireBaseSighting(ts: number): void {
+    if (this.sighting && ts >= this.sighting.ts) this.sighting = null;
+  }
 
   get alignmentId(): string | null { return this.current?.alignment_id ?? null; }
   get sharedFrameContext(): ReadonlyFacts<LocalizationContext> | null { return this.context; }
   beginTrackingReference(reference: string): void {
-    if (this.trackingReference && this.trackingReference !== reference) this.current = null;
+    if (this.trackingReference !== reference) {
+      this.current = null;
+      this.sighting = null;
+    }
     this.trackingReference = reference;
   }
   acceptsContext(context: ReadonlyFacts<SharedFrameContext>): boolean {
@@ -60,7 +76,7 @@ export class ClientTrackingOriginStore {
   /** UI alignment changes retire the estimate without losing the connected session context. */
   clear(): void { this.current = null; }
   /** Connection/source retirement also invalidates its shared-frame context. */
-  resetContext(): void { this.context = null; this.current = null; }
+  resetContext(): void { this.context = null; this.current = null; this.sighting = null; }
   get T_map_tracking(): ReadonlyFacts<ClientTrackingOrigin> | null { return this.current; }
   get hasTrackingOrigin(): boolean { return this.current !== null; }
 }

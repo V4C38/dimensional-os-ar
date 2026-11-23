@@ -55,7 +55,9 @@ end tell
 
 def launch_source(app: Path, project: Path) -> None:
     """Open the chosen editor/project and dismiss its startup window."""
-    subprocess.run(["open", "-a", str(app), str(project)], check=True)
+    # Intel Lens 5.15 can stall inside Rosetta before main() on Apple silicon.
+    # Apply the verified workaround on every launch, not just manual recovery.
+    subprocess.run(["open", "-a", str(app), "--env", "ROSETTA_DISABLE_AOT=1", str(project)], check=True)
     executable = str(app / "Contents/MacOS/Lens Studio")
     for _ in range(60):
         processes = subprocess.run(["pgrep", "-x", "Lens Studio"], capture_output=True, text=True)

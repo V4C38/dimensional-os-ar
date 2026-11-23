@@ -33,10 +33,11 @@ def test_one_hundred_plan_execute_gripper_cycles_through_real_coordinator(monkey
     values = {"joint": 0.0, "finger": 0.0}
     coordinator.get_joint_positions = lambda: dict(values)
     bridge = SimpleNamespace(
-        config=SimpleNamespace(model=SimpleNamespace(gripper_hardware_id="openyam")),
+        config=SimpleNamespace(gripper_tasks={"arm": "openyam_gripper"}),
         _control_coordinator=coordinator,
         _resolve_gripper_group=lambda _: SimpleNamespace(id="arm"),
     )
+    bridge._group_gripper_task = MethodType(ManipulationModule._group_gripper_task, bridge)
     bridge.set_gripper_position = MethodType(ManipulationModule.set_gripper_position, bridge)
     adapter = DimOSManipulationAdapter(bridge)
     module = runtime()

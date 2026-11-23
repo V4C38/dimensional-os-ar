@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   testDir: "./tests/integration-tests",
+  testIgnore: "LauncherStyles.spec.ts",
   workers: 1,
   reporter: [["list"], ["json", { outputFile: process.env.INTEGRATION_RESULTS_DIR ? `${process.env.INTEGRATION_RESULTS_DIR}/playwright-results.json` : "../../Review Data/unit/browser/results.json" }]],
   outputDir: process.env.INTEGRATION_RESULTS_DIR ? `${process.env.INTEGRATION_RESULTS_DIR}/diagnostics/playwright` : fileURLToPath(new URL("../../Review Data/webxr/playwright", import.meta.url)),

@@ -39,9 +39,10 @@ class LauncherEvents:
         sub = _Subscriber()
         self._subs.append(sub)
         try:
+            initial_status = self.snapshot()
             for line in list(self._log):
                 yield {"type": "log", "line": line}
-            yield {"type": "status", **self.snapshot()}
+            yield {"type": "status", **initial_status}
             while True:
                 event = await sub.queue.get()
                 yield event

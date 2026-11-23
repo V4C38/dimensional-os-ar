@@ -45,4 +45,5 @@ def test_linux_dependency_policy(tmp_path: Path, failure: bool) -> None:
         assert 'Acquire::Retries "2"' in row["policy"]
         assert not Path(row["config"]).exists()
     if not failure:
+        assert "portaudio19-dev" in rows[1]["args"]
         assert rows[-1]["args"][-2:] == ["install-deps", "chromium"]

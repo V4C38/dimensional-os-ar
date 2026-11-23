@@ -605,6 +605,9 @@ function decodeState(data: Record<string, unknown>): State {
   }
   return {
     type: "state",
+    ...(data.robot_link === undefined ? {} : {
+      robot_link: decodeRobotLink(asObject(data.robot_link, "robot_link")),
+    }),
     ...(data.safety === undefined ? {} : { safety: decodeSafety(asObject(data.safety, "safety")) }),
     ...(data.playback === undefined ? {} : { playback: decodePlayback(asObject(data.playback, "playback")) }),
     server: { connected_clients: connectedClients },
@@ -614,6 +617,25 @@ function decodeState(data: Record<string, unknown>): State {
     ),
     nav: decodeNavState(asObject(requireKey(data, "nav"), "nav")),
     agent: decodeAgentState(asObject(requireKey(data, "agent"), "agent")),
+  };
+}
+
+function decodeSourceGeneration(data: Record<string, unknown>): number {
+  const generation = requireInteger(data, "source_generation");
+  if (!Number.isSafeInteger(generation) || generation < 0) throw new Error("Invalid source generation");
+  return generation;
+}
+
+function decodeRobotLink(data: Record<string, unknown>): NonNullable<State["robot_link"]> {
+  const status = requireString(data, "status");
+  if (status !== "waiting" && status !== "online" && status !== "offline") throw new Error("Invalid robot link status");
+  const motion_ready = requireBoolean(data, "motion_ready");
+  if (motion_ready && status !== "online") throw new Error("Motion requires online robot telemetry");
+  return {
+    status,
+    source_generation: decodeSourceGeneration(data),
+    motion_ready,
+    reason: data.reason === null ? null : requireString(data, "reason"),
   };
 }
 
@@ -744,10 +766,15 @@ function decodeLocalizationStatus(data: Record<string, unknown>): LocalizationSt
   if (status !== "succeeded" && status !== "failed" && status !== "deferred") throw new Error("invalid localization status");
   const retry = data.retry_after_s === undefined ? undefined : finiteField(data, "retry_after_s");
   if (retry !== undefined && retry < 0) throw new Error("invalid retry delay");
+  const sighting = data.base_sighting === undefined ? undefined : asObject(data.base_sighting, "base_sighting");
   return { type: "localization_status", ...decodeSharedFrameContext(data), scope, status,
     ...(data.map_code === undefined ? {} : { map_code: boundedString(data, "map_code") }),
     ...(retry === undefined ? {} : { retry_after_s: retry }),
     reason: requireString(data, "reason"),
+    ...(sighting === undefined ? {} : { base_sighting: {
+      position: requireVec3(sighting, "position"), orientation: requireQuat(sighting, "orientation"),
+      ts: finiteField(sighting, "ts"), tracking_reference_id: boundedString(sighting, "tracking_reference_id"),
+    } }),
     ...(data.episode_id === undefined ? {} : { episode_id: boundedString(data, "episode_id") }),
     ...(data.ts === undefined ? {} : { ts: finiteField(data, "ts") }) };
 }
@@ -763,6 +790,7 @@ function decodeLocalizationResult(data: Record<string, unknown>): LocalizationRe
 function decodePose(data: Record<string, unknown>): Pose {
   return {
     type: "pose",
+    ...(data.source_generation === undefined ? {} : { source_generation: decodeSourceGeneration(data) }),
     position: requireVec3(data, "position"),
     orientation: requireQuat(data, "orientation"),
     ts: finiteField(data, "ts"),

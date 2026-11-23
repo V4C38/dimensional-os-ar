@@ -5,6 +5,7 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import Mock
 
+from langchain_core.messages import HumanMessage
 import pytest
 
 from dimos.ar.robot.agent_control import AgentTurnGate
@@ -13,7 +14,7 @@ native = pytest.importorskip("dimos.ar.robot.guarded_agent", exc_type=ImportErro
 
 
 def test_native_gate_checks_navigation_and_background_following() -> None:
-    agent = object.__new__(native.ARGuardedMcpClient)
+    agent = object.__new__(native.ARGuardedAgent)
     agent._ar_gate = AgentTurnGate(threading.RLock())
     agent._message_queue = Queue()
     agent._history = []
@@ -171,7 +172,7 @@ def test_start_subscribes_to_the_shared_stop_stream(monkeypatch) -> None:
 
 
 def agent_fixture():
-    agent = object.__new__(native.ARGuardedMcpClient)
+    agent = object.__new__(native.ARGuardedAgent)
     agent._ar_gate = AgentTurnGate(threading.RLock())
     agent._message_queue = Queue()
     agent._history = []
@@ -320,19 +321,21 @@ def test_retired_tool_exception_does_not_kill_worker_or_discard_a_fresh_goal():
     agent = agent_fixture()
     entered, finish, retired, fresh = (threading.Event() for _ in range(4))
     agent._stop_event = threading.Event()
-    agent._state_graph = SimpleNamespace()
-    agent.agent_idle = SimpleNamespace(publish=lambda _idle: retired.set())
+    agent.agent = SimpleNamespace(publish=Mock())
+    agent.agent_idle = SimpleNamespace(publish=lambda idle: retired.set() if idle else None)
 
-    def process(_graph, message):
-        if message == "old":
+    def stream(state, *, stream_mode):
+        assert stream_mode == "updates"
+        if state["messages"][-1].content == "old":
             entered.set()
             assert finish.wait(2)
             raise RuntimeError("Agent action was retired by manual control")
         fresh.set()
         agent._stop_event.set()
+        return iter(())
 
-    agent._process_message = process
-    agent._message_queue.put("old")
+    agent._state_graph = SimpleNamespace(stream=stream)
+    agent._message_queue.put(HumanMessage(content="old"))
     worker = threading.Thread(target=agent._thread_loop)
     worker.start()
     assert entered.wait(2)
@@ -343,13 +346,14 @@ def test_retired_tool_exception_does_not_kill_worker_or_discard_a_fresh_goal():
         # Acquire the same turn lock to wait for the complete cleanup boundary.
         with agent._ar_gate._turn_lock:
             assert agent.ar_agent_set_manual(False)
-        agent._message_queue.put("fresh")
+        agent._message_queue.put(HumanMessage(content="fresh"))
         assert fresh.wait(2)
     finally:
         finish.set()
         agent._stop_event.set()
         worker.join(2)
     assert not worker.is_alive()
+    assert [call.args[0].content for call in agent.agent.publish.call_args_list] == ["old", "fresh"]
 
 
 def test_delayed_follow_entry_cannot_adopt_a_post_stop_resume_generation(monkeypatch):

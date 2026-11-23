@@ -8,14 +8,13 @@ import subprocess
 import sys
 from pathlib import Path
 
-import app
 import preferences
 from config import env_path
 
 
-def test_app_global_stores_are_rebound_after_collection(tmp_path: Path) -> None:
-    assert app.manager.root == tmp_path
-    assert app.robot_profiles.path == tmp_path / "xdg-config/dimos/ar-profiles.json"
+def test_app_context_uses_isolated_stores(app_context, tmp_path: Path) -> None:
+    assert app_context.manager.root == tmp_path
+    assert app_context.robot_profiles.path == tmp_path / "xdg-config/dimos/ar-profiles.json"
     assert preferences.path() == tmp_path / "xdg-config/dimos/ar-launcher.json"
     assert env_path() == tmp_path / "launcher/.env"
 
@@ -49,3 +48,26 @@ def test_settings_suite_preserves_preexisting_user_files(tmp_path: Path) -> None
     for path, value in sentinels.items():
         assert path.read_bytes() == value, f"Settings test modified {path.name}"
     assert (repository_env.read_bytes() if repository_env.exists() else None) == original_env
+
+
+async def test_application_instances_use_their_own_settings(tmp_path: Path) -> None:
+    from httpx import ASGITransport, AsyncClient
+
+    from app import LauncherContext, create_app
+    from armodule import ProcessManager
+    from config import merge_env
+    from robot_profiles import RobotProfiles
+
+    async def settings_from_fixture(name: str) -> dict:
+        root = tmp_path / name
+        path = env_path(root)
+        merge_env({"OPENAI_API_KEY": name}, path)
+        context = LauncherContext(ProcessManager(root=root), RobotProfiles(root / "profiles.json"))
+        transport = ASGITransport(app=create_app(context), client=("127.0.0.1", 1234))
+        async with AsyncClient(transport=transport, base_url="http://localhost:8790") as client:
+            response = await client.get("/api/settings")
+        assert response.status_code == 200
+        return response.json()
+
+    assert (await settings_from_fixture("first"))["openai_api_key"] == "first"
+    assert (await settings_from_fixture("second"))["openai_api_key"] == "second"

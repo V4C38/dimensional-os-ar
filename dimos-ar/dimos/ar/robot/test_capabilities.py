@@ -77,7 +77,7 @@ def test_detection_is_explicit_and_not_implied_by_agent():
     assert blueprint_has_object_detection(
         blueprint("dimos.perception.detection.module3D", "Detection3DModule")
     )
-    assert not blueprint_has_object_detection(blueprint("dimos.agents.mcp.mcp_client", "McpClient"))
+    assert not blueprint_has_object_detection(blueprint("dimos.agents.agent", "Agent"))
     assert not blueprint_has_object_detection(
         blueprint("dimos.perception.fiducial.marker_detection", "MarkerDetectionStreamModule")
     )

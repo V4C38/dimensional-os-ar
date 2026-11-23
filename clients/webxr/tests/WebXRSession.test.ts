@@ -470,18 +470,19 @@ it("uses one activity derivation for the UI badge and robot through idle, recogn
   expect(feedback.mock.calls.at(-1)?.[0].activity).toBe("Responding");
 });
 
-it("gates selection and manual commands during alignment review and restores eligibility on dismissal", () => {
+it("keeps navigation available during an advisory alignment review", () => {
   const f = fixture(); const socket = f.connect(); f.client.ui.flow.finish();
   f.client.setRobotSelected(true); f.tick();
   expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: true, robotSelectable: true });
   f.client.ui.requestAlignmentReview("reference-reset");
   expect(f.client.controlsEnabled()).toBe(false);
-  f.tick({ x: 0, y: -1 }); f.client.setRobotSelected(true);
-  expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: false });
-  expect(socket.commands("nav_joystick_request")).toHaveLength(0);
+  expect(f.client.navigationControlsEnabled()).toBe(true);
+  f.tick({ x: 0, y: -1 });
+  expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: true, robotSelectable: true });
+  expect(socket.commands("nav_joystick_request")).toHaveLength(1);
   f.client.ui.dismissAlignmentReview(); f.tick();
   expect(f.client.controlsEnabled()).toBe(true);
-  expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: false, robotSelectable: true });
+  expect(f.client.ui.snapshot()).toMatchObject({ robotSelected: true, robotSelectable: true });
 });
 
 

@@ -1,34 +1,36 @@
 """Hardware-free verification of the official planning scene and AR worker snapshots."""
 
-from dimos.ar.manipulation.adapter import DimOSManipulationAdapter
-from dimos.ar.manipulation.model import describe_model
+import xml.etree.ElementTree as ET
+
+import numpy as np
+
 from dimos.ar.manipulation.model_config import (
-    safe_openyam_model,
-    with_finger_self_collision_exclusion,
-    with_openyam_collision_geometry,
+    make_ar_openyam_model,
+    openyam_gripper_feedback_limits,
 )
-from dimos.ar.manipulation.module import ARManipulationModuleConfig
+from dimos.ar.manipulation.module import ARManipulationModule
 from dimos.manipulation.manipulation_module import ManipulationModule
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.msgs.sensor_msgs.JointState import JointState
-from dimos.robot.manipulators.openyam.config import make_openyam_model_config
 
 
 def check_scene():
-    config = ARManipulationModuleConfig(
-        model=with_finger_self_collision_exclusion(with_openyam_collision_geometry(safe_openyam_model(make_openyam_model_config())))
-    )
-    module = ManipulationModule(model=config.model)
-    module.config = config
-    adapter = DimOSManipulationAdapter(module)
+    limits = openyam_gripper_feedback_limits()
+    jaw, (native_open, native_closed) = next(iter(limits.items()))
+    model = make_ar_openyam_model()
+    module = ARManipulationModule(model=model, reversed_feedback_joint_limits=limits)
+    adapter = module._adapter
+    names = model.joint_names
+    raw = JointState(name=list(names), position=list(model.home_joints))
+    raw.position[names.index(jaw)] = native_closed
     try:
         module._initialize_planning()
-        feedback = JointState(name=list(config.model.joint_names), position=list(config.model.home_joints))
-        adapter.feedback = feedback
-        module._on_joint_state(feedback)
-        import xml.etree.ElementTree as ET
-        collision_links = [link.attrib["name"] for link in ET.fromstring(config.model.model.load().xml).findall("link")
+        module._started = True
+        module._on_joint_state(raw)
+        feedback = adapter.feedback
+        assert feedback is not None and feedback.position[names.index(jaw)] == native_open
+        collision_links = [link.attrib["name"] for link in ET.fromstring(model.model.load().xml).findall("link")
                            if link.findall("collision")]
         scene = module._world_monitor.world._scene
         assert all(scene.getCollisionGeometryIDs(link) for link in collision_links)
@@ -40,6 +42,7 @@ def check_scene():
         assert evaluation.success, evaluation.message
         plan = adapter.plan_to_poses({group: target}, speed_scale=0.2)
         assert plan.succeeded and plan.plan is not None
+        assert set(plan.plan.trajectory.joint_names) == set(names) - {jaw}
         retired_worker = adapter.worker
         assert retired_worker is not None
         old_pid = retired_worker.process.pid
@@ -75,26 +78,34 @@ def check_scene():
         assert module.remove_obstacle(obstacle)
         assert adapter.evaluate(group, target).success
         assert adapter.plan_to_poses({group: target}, speed_scale=0.2).succeeded
-        description = describe_model(config.model.model.load().xml)
-        finger = next(link for link in description["links"] if link["name"] == "tip_left")
         world = module._world_monitor.world
+        # Centers of the distal contact pads in the managed finger meshes.
         with world.scratch_context() as context:
             world.set_joint_state(context, feedback)
-            transform = world.get_link_pose(context, "tip_left")
-        import numpy as np
-        center = transform[:3, :3] @ np.asarray(finger["bounds"]["center"]) + transform[:3, 3]
-        finger_obstacle = module.add_obstacle(
-            "finger-environment", Pose(position=center.tolist()), "sphere", [0.02]
+            left = world.get_link_pose(context, "hand_left_finger") @ [0.084, -0.0454, 0, 1]
+            right = world.get_link_pose(context, "hand_right_finger") @ [0.084, 0.0448, 0, 1]
+            assert np.linalg.norm(left[:3] - right[:3]) < 0.01
+        obstacle = module.add_obstacle(
+            "closed-pad-contact", Pose(position=left[:3].tolist()), "sphere", [0.005]
         )
-        for link in collision_links:
-            scene.setCollisions(link, finger_obstacle, link == "tip_left")
-        assert not module._world_monitor.is_state_valid(feedback), "finger collision geometry is absent"
-        assert module.remove_obstacle(finger_obstacle)
-        assert module._world_monitor.is_state_valid(feedback)
+        assert obstacle and not module._world_monitor.is_state_valid(feedback)
+        raw.position[names.index(jaw)] = native_open
+        module._on_joint_state(raw)
+        opened = adapter.feedback
+        assert opened is not None
+        with world.scratch_context() as context:
+            world.set_joint_state(context, opened)
+            left = world.get_link_pose(context, "hand_left_finger") @ [0.084, -0.0454, 0, 1]
+            right = world.get_link_pose(context, "hand_right_finger") @ [0.084, 0.0448, 0, 1]
+            assert np.linalg.norm(left[:3] - right[:3]) > 0.09
+        assert module._world_monitor.is_state_valid(opened), "open pads still touch the test obstacle"
+        assert module.remove_obstacle(obstacle)
+        module._on_joint_state(JointState(name=names[:-1], position=raw.position[:-1]))
+        assert adapter.feedback is None, "missing jaw measurement was accepted"
         print("Official planning scene synchronization verified", flush=True)
     finally:
         adapter.close_workers()
-        module.stop()
+        ManipulationModule.stop(module)
 
 
 if __name__ == "__main__":

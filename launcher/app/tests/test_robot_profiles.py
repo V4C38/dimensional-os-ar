@@ -74,26 +74,26 @@ def test_default_profile_ignores_global_config(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("client", ["specs", "webxr"])
-async def test_openyam_start_accepts_either_client_with_explicit_profile(
-    monkeypatch, client
+async def test_openyam_start_uses_explicit_profile(
+    app_context,
+    monkeypatch,
 ):
     from unittest.mock import AsyncMock
 
     import app
 
     start = AsyncMock()
-    monkeypatch.setattr(app.manager, "start_armodule", start)
-    monkeypatch.setattr(app.manager, "snapshot", dict)
+    monkeypatch.setattr(app_context.manager, "start_armodule", start)
+    monkeypatch.setattr(app_context.manager, "snapshot", dict)
     monkeypatch.setattr(
-        app.robot_profiles,
+        app_context.robot_profiles,
         "snapshot",
         lambda profile_id, blueprint: {"profile": profile_id},
     )
     await app.api_armodule_start(
-        app.StartBody(blueprint="openyam_ar_planner", client=client, profile_id="arm", source=app.SourceBody(mode="simulated"))
-    )
-    assert start.await_args.kwargs["client"] == client
+        app.StartBody(blueprint="openyam_ar_planner", profile_id="arm", source=app.SourceBody(mode="simulated"))
+    , context=app_context)
+    assert start.await_args.kwargs["armodule_config"] == {"profile": "arm"}
 
 
 @pytest.mark.parametrize("blueprint", ["unitree_go2_ar", "openyam_ar_planner"])
@@ -157,3 +157,20 @@ def test_saved_lidar_map_is_go2_only_and_rejected_before_persistence(tmp_path):
         profiles.snapshot(arm["id"], "openyam_ar_planner")
     profiles.update(arm["id"], settings={"native_map_file": None})
     assert profiles.snapshot(arm["id"], "openyam_ar_planner")["localization"]["native_map_file"] is None
+
+
+def test_empty_marker_list_persists_without_enabling_runtime_fiducial_provider(tmp_path):
+    from tag_config import ui_from_armodule_config
+
+    profiles = RobotProfiles(tmp_path / "profiles.json")
+    profile = profiles.create("openyam", "Empty marker list")
+    profile_id = profile["id"]
+    profiles.update(profile_id, settings={"mounts": [], "vps": True, "map_code": "test-map"})
+
+    stored = RobotProfiles(profiles.path).get(profile_id)["armodule"]
+    settings = ui_from_armodule_config(stored)
+    assert settings["mounts"] == []
+    assert settings["fiducial_marker"] is True
+    runtime = profiles.snapshot(profile_id, "openyam_ar_planner")
+    assert "fiducial_marker_mounts" not in runtime
+    assert runtime["localization"]["providers"] == [{"type": "vps", "map_code": "test-map"}]

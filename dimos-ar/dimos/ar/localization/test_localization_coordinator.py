@@ -12,7 +12,7 @@ import pytest
 
 from dimos.ar.async_execution import BoundedWorker
 from dimos.ar.localization.coordinator import LocalizationCoordinator
-from dimos.ar.localization.types import LocalizedPose
+from dimos.ar.localization.types import LocalizedPose, TagResult, TagSighting
 from dimos.ar.localization.vps.admission import VpsAdmission
 from dimos.ar.robot.odometry import PoseBuffer
 from dimos.ar.spatial import frozen_matrix
@@ -38,6 +38,14 @@ async def setup():
     local = SimpleNamespace(
         localize=lambda obs: LocalizedPose(matrix_to_pose(transform(1, 2)), "odom", 0.9)
     )
+    def localize_tag(observations):
+        ts = observations[-1].ts_server
+        pose = history.at_server_ts(ts)
+        alignment = local.localize(observations)
+        sighting = TagSighting(matrix_to_pose(transform(2, 3)), ts)
+        return TagResult(alignment if pose else None, pose, sighting, ts if pose else None)
+
+    local.localize_tag = localize_tag
     local.snapshot = lambda: local
     worker = BoundedWorker()
     messages, changes = [], []
@@ -343,7 +351,26 @@ async def test_missing_capture_pose_does_not_report_live_telemetry_loss(setup):
     status = f.messages[-1][1]
     assert status["reason"] == "capture_pose_unavailable"
     assert status["episode_id"]
+    assert status["base_sighting"]["ts"] == 96
+    assert status["base_sighting"]["tracking_reference_id"] == "tracking1"
+    assert status["base_sighting"]["position"] == [2, 3, 0]
     assert f.odometry.history.at_server_ts(100) is not None
+
+
+async def test_robot_link_loss_preserves_private_sighting_without_aligning(setup):
+    f = setup
+    f.service.connect("observer")
+    episode = f.service._request("client", f.client, "robot")
+    assert episode is not None
+    f.service.retire_pending()
+
+    await f.service._tag("client", f.client, episode, (_observation(100),))
+
+    assert results(f) == []
+    recipient, status = f.messages[-1]
+    assert recipient == "client"
+    assert status["base_sighting"]["ts"] == 100
+    assert f.service.frames.revision == 0
 
 
 async def test_capture_travel_not_completion_travel_controls_refresh(setup):

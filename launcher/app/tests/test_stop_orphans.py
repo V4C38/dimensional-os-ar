@@ -2,11 +2,12 @@
 
 import signal
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from armodule import ARMODULE_PORT, Phase, ProcessManager
+from armodule import ARMODULE_PORT, STOP_GRACE_SECONDS, Phase, ProcessManager
 
 
 @pytest.mark.asyncio
@@ -56,7 +57,7 @@ async def test_explicit_takeover_signals_only_selected_listener_pid(tmp_path: Pa
         await mgr._clear_before_start(takeover_pids=[4242])
     kill.assert_called_once_with(4242, signal.SIGINT)
     killpg.assert_not_called()
-    assert not mgr.runtime.stopping_pids
+    assert not mgr.process_groups.stopping_pids
 
 
 @pytest.mark.real_clear
@@ -177,3 +178,25 @@ async def test_exited_leader_with_inherited_stdout_retires_owned_worker(
         if unrelated.returncode is None:
             unrelated.kill()
         await unrelated.wait()
+
+
+@pytest.mark.asyncio
+async def test_explicit_stop_cleans_up_only_previous_blueprint_groups(tmp_path, monkeypatch):
+    manager = ProcessManager(root=tmp_path)
+    monkeypatch.setattr(manager, "_pids_listening", AsyncMock(return_value=[6260, 4242]))
+    monkeypatch.setattr("armodule.os.getpgid", lambda pid: 6228 if pid == 6260 else 4242)
+
+    async def ps(*args, **kwargs):
+        command = (
+            b"/path/bin/python3 /path/bin/dimos run dimos-ar.unitree-go2-ar"
+            if args[2] == "6228" else b"/path/bin/unrelated"
+        )
+        return SimpleNamespace(returncode=0, communicate=AsyncMock(return_value=(command, b"")))
+
+    monkeypatch.setattr("armodule.asyncio.create_subprocess_exec", ps)
+    stop_group = AsyncMock()
+    monkeypatch.setattr(manager.process_groups, "stop_group", stop_group)
+
+    await manager.stop_armodule(include_previous=True)
+
+    stop_group.assert_awaited_once_with(6228, "previous DimOS blueprint", STOP_GRACE_SECONDS)

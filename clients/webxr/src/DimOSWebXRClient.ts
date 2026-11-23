@@ -1,7 +1,7 @@
 import { isSelectionEligible, isManualControlEnabled } from "@dimos-ar-client/presentation/ControlPanelPresentation";
 import type { ReadonlyFacts } from "@dimos-ar-client/ClientContracts";
 import { clientTrackingToWebxrPoint } from "./utilities/WebXRCoordinates";
-import { ClientTrackingOriginStore, composePose, type ClientTrackingOrigin as MutableClientTrackingOrigin, rotateVecByQuat } from "@dimos-ar-client/localization/ClientTracking";
+import { ClientTrackingOriginStore, composePose, type ClientTrackingOrigin as MutableClientTrackingOrigin } from "@dimos-ar-client/localization/ClientTracking";
 import { WebXRManipulationController } from "./manipulation/WebXRManipulationController";
 import { AlignmentWarning, alignmentDistance } from "@dimos-ar-client/presentation/NotificationCenter";
 import { ClientPosePublisher } from "@dimos-ar-client/agent/AgentTransport";
@@ -70,7 +70,6 @@ export class DimOSWebXRClient {
   private readonly posePublisher: ClientPosePublisher;
   private lastMarkerOrigin: ClientTrackingOrigin | null = null;
   private lastTickAt: number | null = null;
-  private lastCamera: { position: Vec3; orientation: Quat } | null = null;
   private disposed = false;
   readonly selection = new RobotSelection();
   private readonly unsubscribeSelection: () => void;
@@ -109,7 +108,7 @@ export class DimOSWebXRClient {
     this.ui.manipulationDiagnostics = () => JSON.stringify({ capture: this.manipulation.interaction.captureEvents, advisory: this.manipulation.interaction.diagnostics() });
     this.speech = new AgentDraftSession({
       recognition: deps.recognitionFactory?.(this.session) ?? deps.recognition ?? null, synthesis: deps.synthesis ?? null,
-      send: text => this.ui.sendAgentText(text), estop: () => this.emergencyStop(),
+      send: text => this.ui.sendAgentText(text),
       isSelected: () => this.isRobotSelected(), select: () => this.setRobotSelected(true),
     });
     this.robot = new WebXRRobotPresenter();
@@ -140,9 +139,6 @@ export class DimOSWebXRClient {
         reportDiagnostic("connection", { phase: view.connection, error: view.lastError });
       }
       this.ui.onSessionView(view, prev, this.clock.now());
-      if (view.connection === "ready" && view.alignmentRequired && !view.hasTrackingOrigin && this.ui.setupCompleted) {
-        this.ui.requestAlignmentReview("Robot connection changed; re-localize to continue");
-      }
       if (view.connection !== "ready" && !this.manipulation.interaction.retainingFeedback) {
         this.loseInput();
         this.setRobotSelected(false);
@@ -192,7 +188,6 @@ export class DimOSWebXRClient {
     if (this.disposed) {
       return;
     }
-    this.lastCamera = cameraPose;
     this.camera.samplePose(cameraPose.position, cameraPose.orientation);
     if (pumpSession) this.pumpSession();
     this.episode.tick();
@@ -206,7 +201,7 @@ export class DimOSWebXRClient {
     this.manipulation.renderer.debugEnabled = this.ui.debugEnabled;
     this.manipulation.tick(this.controlsEnabled() && view.hasTrackingOrigin);
     this.navigation.tick(now, visibleDeltaS);
-    this.joystick.tick(now, this.controlsEnabled() ? joystick : null);
+    this.joystick.tick(now, this.navigationControlsEnabled() ? joystick : null);
     if (!this.navigationMarkerEnabled()) this.navigation.cancelDrag();
     const deltaS = this.lastTickAt === null ? 0 : Math.min(0.1, Math.max(0, now - this.lastTickAt));
     this.lastTickAt = now;
@@ -224,7 +219,7 @@ export class DimOSWebXRClient {
 
   /** Direct marker drags stream goals; floor gestures preview first, then confirm. */
   holdNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], fromMarker = true, sourceId = "default"): void {
-    if (!(fromMarker ? this.navigationMarkerEnabled() : this.controlsEnabled()) || !this.originStore.hasTrackingOrigin) {
+    if (!(fromMarker ? this.navigationMarkerEnabled() : this.navigationControlsEnabled()) || !this.originStore.hasTrackingOrigin) {
       return;
     }
     const origin = this.originStore.T_map_tracking;
@@ -271,7 +266,7 @@ export class DimOSWebXRClient {
   toggleRobotSelection(): void { this.setRobotSelected(!this.selection.isSelected()); }
 
   aimNavigation(rayFrom: Vec3, rayDir: Vec3, planes: readonly FloorPlane[], sourceId = "default"): void {
-    if (!this.controlsEnabled() || !this.originStore.hasTrackingOrigin) { this.navigation.clearAim(); return; }
+    if (!this.navigationControlsEnabled() || !this.originStore.hasTrackingOrigin) { this.navigation.clearAim(); return; }
     const floorY = this.robot.floorWorldY() ?? 0;
     this.navigation.aim(this.clock.now(), rayFrom, rayDir,
       navigationSurfaceHits(rayFrom, rayDir, planes, floorY), floorY, sourceId);
@@ -298,10 +293,15 @@ export class DimOSWebXRClient {
     const view = this.session.view();
     const shared = this.session.collaboration.snapshot();
     return isManualControlEnabled(view, this.ui.setupCompleted,
-      this.ui.alignmentReview?.pending === true, this.ui.setupCelebrating, "manual") &&
+      false, this.ui.setupCelebrating, "manual") &&
       view.hasTrackingOrigin && view.capabilities?.navigation.nav_goal.available === true &&
       view.state?.safety?.stopped !== true &&
       (this.ui.operatingMode === "manual" || shared.canTakeover === true || shared.takeoverPending === true);
+  }
+
+  navigationControlsEnabled(): boolean {
+    return isManualControlEnabled(this.session.view(), this.ui.setupCompleted,
+      false, this.ui.setupCelebrating, this.ui.operatingMode);
   }
 
   controlsEnabled(): boolean {
@@ -343,7 +343,6 @@ export class DimOSWebXRClient {
     this.suspend();
     // Retire the socket so a result from the old reference space cannot restore alignment.
     this.session.stop();
-    this.lastCamera = null;
     this.originStore.clear();
     this.episode.resetTrackingReference();
     this.navigation.reset();
@@ -422,7 +421,7 @@ export class DimOSWebXRClient {
     }
     const origin = this.originStore.T_map_tracking;
     const now = this.clock.now();
-    this.robot.apply(view, origin, this.ui.setupCompleted, this.unlocalizedFallback());
+    this.robot.apply(view, origin, this.ui.setupCompleted);
     this.syncSelectionEligibility();
     this.robot.setSelected(this.selection.isSelected());
     this.robot.setFloorVisible(this.navigation.marker.object.visible && this.navigation.interaction.snapshot().attachedToRobot === false);
@@ -473,22 +472,10 @@ export class DimOSWebXRClient {
     }
   }
 
-  private unlocalizedFallback(): Vec3 | null {
-    if (!this.lastCamera) {
-      return null;
-    }
-    const forward = rotateVecByQuat(this.lastCamera.orientation, [0, 0, -1]);
-    return [
-      this.lastCamera.position[0] + forward[0] * 1.4,
-      0,
-      this.lastCamera.position[2] + forward[2] * 1.4,
-    ];
-  }
-
   private maybeSendClientPose(): void { this.posePublisher.tick(); }
 
   private syncSelectionEligibility(): void {
     this.selection.setEligible(isSelectionEligible(this.session.view(), this.ui.setupCompleted,
-      this.ui.alignmentReview?.pending === true, this.manipulation.interaction.retainingFeedback));
+      false, this.manipulation.interaction.retainingFeedback));
   }
 }

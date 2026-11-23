@@ -16,8 +16,6 @@ type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 type RobotActivityVoice = { asrRunning: boolean; ttsPlaying: boolean };
 
 export interface RobotMarkerApplyContext {
-  mainUi: SceneObject;
-  fallbackUniformScale?: number;
   debugEnabled: boolean;
 }
 
@@ -29,26 +27,6 @@ export function robotFloorOffsetCm(robot: ReadonlyFacts<RobotDescription>): Vec3
 
 export function robotDeadzoneRadiusCm(robot: ReadonlyFacts<RobotDescription>): number {
   return robotDeadzoneRadiusM(robot.footprint_m) * 100;
-}
-
-export function robotBelowMainUiLocalOffset(): vec3 {
-  return new vec3(0, -40, 0.5);
-}
-
-export function robotBelowMainUiWorldPosition(
-  mainUi: SceneObject,
-  fallbackUniformScale: number = 1,
-): vec3 {
-  const transform = mainUi.getTransform();
-  const worldPosition = transform.getWorldPosition();
-  const worldRotation = transform.getWorldRotation();
-  const worldScale = transform.getWorldScale();
-  const local = robotBelowMainUiLocalOffset();
-  const scaleX = Math.abs(worldScale.x) > 1e-4 ? worldScale.x : fallbackUniformScale;
-  const scaleY = Math.abs(worldScale.y) > 1e-4 ? worldScale.y : fallbackUniformScale;
-  const scaleZ = Math.abs(worldScale.z) > 1e-4 ? worldScale.z : fallbackUniformScale;
-  const scaledLocal = new vec3(local.x * scaleX, local.y * scaleY, local.z * scaleZ);
-  return worldPosition.add(worldRotation.multiplyVec3(scaledLocal));
 }
 
 @component
@@ -83,16 +61,8 @@ export class RobotPresenter extends BaseScriptComponent {
   setFloorHeight(height: number | null): void { this.referenceFloorHeight = height; }
   private motionRoot: SceneObject | null = null;
   private debugViewRoot: SceneObject | null = null;
-  private unlocalizedAnchorCommitted = false;
-  private unlocalizedAnchorPending = false;
-  private pendingUnlocalizedCtx: RobotMarkerApplyContext | null = null;
-  private unlocalizedPlaceEvent: DelayedCallbackEvent | null = null;
-
   onAwake(): void {
     this.configureSceneRefs();
-    const placeEv = this.createEvent("DelayedCallbackEvent") as DelayedCallbackEvent;
-    placeEv.bind(() => this.commitUnlocalizedAnchor());
-    this.unlocalizedPlaceEvent = placeEv;
     this.reset();
     const updateEvent = this.createEvent("UpdateEvent");
     updateEvent.bind(() => this.tick(getDeltaTime()));
@@ -104,13 +74,21 @@ export class RobotPresenter extends BaseScriptComponent {
       case "hidden":
         this.applyHidden();
         return;
-      case "localizedPending":
+      case "lastSeen": {
+        if (!this.motionRoot) return;
         this.poseSmoothing.reset();
+        this.placedOrigin = null;
+        const pose = clientTrackingToSpecsPose(input.sighting);
+        this.motionRoot.getTransform().setWorldPosition(toVec3(pose.position));
+        this.motionRoot.getTransform().setWorldRotation(toQuat(pose.orientation));
+        this.robot = input.robot;
+        this.worldVisuals?.setRobot(input.robot);
         this.worldVisuals?.setPickingEnabled(false);
+        this.presented = true;
+        this.getSceneObject().enabled = this.motionRoot.enabled = true;
+        this.applyDebugViewVisibility(ctx.debugEnabled);
         return;
-      case "unlocalizedFallbackPosition":
-        this.applyUnlocalizedBelow(input, ctx);
-        return;
+      }
       case "localizedOdom":
         this.applyLocalizedOdom(input, ctx);
         return;
@@ -126,7 +104,7 @@ export class RobotPresenter extends BaseScriptComponent {
     this.origin = null;
     this.referenceFloorHeight = null;
     this.presented = false;
-    this.cancelUnlocalizedAnchor();
+    this.placedOrigin = null;
     this.robot = null;
     this.poseSmoothing.reset();
     this.getSceneObject().enabled = false;
@@ -142,8 +120,8 @@ export class RobotPresenter extends BaseScriptComponent {
     view: ARModuleSessionState,
     voice: RobotActivityVoice & { status?: string },
   ): void {
-    const title = robotTitleText(view);
-    const state = getRobotActivityState(view, voice);
+    const title = this.presented && !this.origin ? this.robot?.display_name ?? "Robot" : robotTitleText(view);
+    const state = this.presented && !this.origin ? "Last seen" : getRobotActivityState(view, voice);
     this.worldVisuals?.labels(title, state, debugEnabled ? view.pose?.position.map(v => v.toFixed(2)).join(", ") ?? "" : "", sessionLinkStatus(view).color);
     this.applyDebugViewVisibility(debugEnabled);
   }
@@ -157,9 +135,10 @@ export class RobotPresenter extends BaseScriptComponent {
       const toggle = findChildRecursive(this.motionRoot, "RobotToggleButton");
       if (toggle) toggle.enabled = false;
     }
+    this.worldVisuals?.setPickingEnabled(this.origin !== null);
     this.worldVisuals?.tick(dt, this.floorPose(), this.eye?.getTransform().getWorldPosition() ?? null, this.viewportHeight);
     // The copy follows the displayed position after the existing pose smoothing.
-    if (this.unlocalizedAnchorCommitted || !this.presented || !this.motionRoot || !this.poseSmoothing.isTracking) {
+    if (!this.origin || !this.presented || !this.motionRoot || !this.poseSmoothing.isTracking) {
       this.worldVisuals?.updateCorrection(null, null, this.viewportHeight);
       return;
     }
@@ -178,14 +157,14 @@ export class RobotPresenter extends BaseScriptComponent {
   }
 
   worldPosition(): vec3 | null {
-    if (!this.presented || !this.motionRoot) {
+    if (!this.origin || !this.presented || !this.motionRoot) {
       return null;
     }
     return this.motionRoot.getTransform().getWorldPosition();
   }
 
   worldRotation(): quat | null {
-    if (!this.presented || !this.motionRoot) {
+    if (!this.origin || !this.presented || !this.motionRoot) {
       return null;
     }
     return this.motionRoot.getTransform().getWorldRotation();
@@ -235,7 +214,7 @@ export class RobotPresenter extends BaseScriptComponent {
 
   private applyHidden(): void {
     this.presented = false;
-    this.cancelUnlocalizedAnchor();
+    this.placedOrigin = null;
     this.getSceneObject().enabled = false;
     if (this.motionRoot) {
       this.motionRoot.enabled = false;
@@ -244,72 +223,12 @@ export class RobotPresenter extends BaseScriptComponent {
     this.worldVisuals?.reset();
   }
 
-  private applyUnlocalizedBelow(
-    input: Extract<RobotMarkerApplyInput, { mode: "unlocalizedFallbackPosition" }>,
-    ctx: RobotMarkerApplyContext,
-  ): void {
-    if (!this.motionRoot) {
-      return;
-    }
-    this.robot = input.robot;
-    this.worldVisuals?.setRobot(input.robot);
-    this.pendingUnlocalizedCtx = ctx;
-    if (this.unlocalizedAnchorCommitted) {
-      this.showUnlocalizedAnchor();
-      return;
-    }
-    if (this.unlocalizedAnchorPending) {
-      return;
-    }
-    this.unlocalizedAnchorPending = true;
-    this.poseSmoothing.reset();
-    this.getSceneObject().enabled = true;
-    this.unlocalizedPlaceEvent?.reset(1);
-  }
-
-  private commitUnlocalizedAnchor(): void {
-    const ctx = this.pendingUnlocalizedCtx;
-    if (!this.unlocalizedAnchorPending || !this.motionRoot || !ctx) {
-      return;
-    }
-    this.unlocalizedAnchorPending = false;
-    const worldPosition = robotBelowMainUiWorldPosition(
-      ctx.mainUi,
-      ctx.fallbackUniformScale ?? 1,
-    );
-    const transform = this.motionRoot.getTransform();
-    transform.setWorldPosition(worldPosition);
-    transform.setWorldRotation(quat.quatIdentity());
-    this.unlocalizedAnchorCommitted = true;
-    this.showUnlocalizedAnchor();
-  }
-
-  private showUnlocalizedAnchor(): void {
-    if (!this.motionRoot || !this.pendingUnlocalizedCtx) {
-      return;
-    }
-    this.presented = true;
-    this.getSceneObject().enabled = true;
-    this.motionRoot.enabled = true;
-    this.applyDebugViewVisibility(this.pendingUnlocalizedCtx.debugEnabled);
-  }
-
-  private cancelUnlocalizedAnchor(): void {
-    this.unlocalizedAnchorCommitted = false;
-    this.unlocalizedAnchorPending = false;
-    this.pendingUnlocalizedCtx = null;
-    this.unlocalizedPlaceEvent?.cancel();
-  }
-
   private applyLocalizedOdom(
     input: Extract<RobotMarkerApplyInput, { mode: "localizedOdom" }>,
     ctx: RobotMarkerApplyContext,
   ): void {
     if (!this.motionRoot) {
       return;
-    }
-    if (this.unlocalizedAnchorCommitted || this.unlocalizedAnchorPending) {
-      this.clearUnlocalizedAnchor();
     }
     const specs = clientTrackingToSpecsPose(
       projectRobotPose(input),
@@ -329,16 +248,6 @@ export class RobotPresenter extends BaseScriptComponent {
     this.getSceneObject().enabled = true;
     this.motionRoot.enabled = true;
     this.applyDebugViewVisibility(ctx.debugEnabled);
-  }
-
-  private clearUnlocalizedAnchor(): void {
-    this.cancelUnlocalizedAnchor();
-    this.poseSmoothing.reset();
-    if (this.motionRoot) {
-      this.motionRoot.enabled = false;
-    }
-    this.applyDebugViewVisibility(null);
-    this.worldVisuals?.reset();
   }
 
   private configureSceneRefs(): void {

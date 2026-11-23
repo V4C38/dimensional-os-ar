@@ -84,6 +84,17 @@ if [[ -n "${FLAG_DIMOS_PYTHON}" && -n "${FLAG_CLONE_DIR}" ]]; then
   exit 1
 fi
 
+absolute_setup_path() {
+  local path="$1"
+  if [[ "${path}" == "~/"* ]]; then
+    path="${HOME}/${path:2}"
+  fi
+  if [[ "${path}" != /* ]]; then
+    path="${PWD}/${path}"
+  fi
+  printf '%s\n' "${path}"
+}
+
 DEFAULT_DIMOS_DIR="$(cd "${ROOT}/.." && pwd)/dimos"
 
 ask_yes_no() {
@@ -114,18 +125,18 @@ prompt_with_default() {
   printf '%s\n' "${reply:-${default}}"
 }
 
-python_is_ge_312() {
+python_is_312() {
   local py="$1"
   "${py}" - <<'PY' >/dev/null 2>&1
 import sys
-raise SystemExit(0 if sys.version_info >= (3, 12) else 1)
+raise SystemExit(0 if sys.version_info[:2] == (3, 12) else 1)
 PY
 }
 
 find_python_for_venv() {
   local candidate=""
-  for candidate in python3.13 python3.12 python3; do
-    if command -v "${candidate}" >/dev/null 2>&1 && python_is_ge_312 "$(command -v "${candidate}")"; then
+  for candidate in python3.12 python3; do
+    if command -v "${candidate}" >/dev/null 2>&1 && python_is_312 "$(command -v "${candidate}")"; then
       command -v "${candidate}"
       return 0
     fi
@@ -143,7 +154,7 @@ run_check() {
   local dimos_ref=""
 
   if [[ -n "${FLAG_DIMOS_PYTHON}" ]]; then
-    DIMOS_PYTHON="${FLAG_DIMOS_PYTHON}"
+    DIMOS_PYTHON="$(absolute_setup_path "${FLAG_DIMOS_PYTHON}")"
   fi
 
   if dimos_py="$(find_dimos_python "${ROOT}" 2>/dev/null)"; then
@@ -178,8 +189,15 @@ except subprocess.CalledProcessError:
     print("unknown", end="")
 PY
 )"
-    ar_code="$(python_dimos_ar_status "${dimos_py}" || true)"
+    if python_is_312 "${dimos_py}"; then
+      ar_code="$(python_dimos_ar_status "${dimos_py}" || true)"
+    else
+      ar_code="unsupported_python"
+    fi
     case "${ar_code}" in
+      unsupported_python)
+        ar_status="requires Python 3.12"
+        ;;
       installed)
         ar_status="installed"
         check_ok=1
@@ -234,15 +252,16 @@ prompt_for_existing_dimos_python() {
   while true; do
     read -r -p "Enter the path to the Python executable in your DimOS environment: " candidate
     if [[ -z "${candidate}" ]]; then
-      echo "A Python path is required."
+      echo "A Python path is required." >&2
       continue
     fi
+    candidate="$(absolute_setup_path "${candidate}")"
     if [[ ! -x "${candidate}" ]]; then
-      echo "Not executable: ${candidate}"
+      echo "Not executable: ${candidate}" >&2
       continue
     fi
     if ! python_has_dimos "${candidate}"; then
-      echo "That interpreter does not have the 'dimos' package installed."
+      echo "That interpreter does not have the 'dimos' package installed." >&2
       continue
     fi
     printf '%s\n' "${candidate}"
@@ -250,15 +269,11 @@ prompt_for_existing_dimos_python() {
   done
 }
 
-is_dimos_source_tree() {
-  local dir="$1"
-  [[ -d "${dir}/.git" ]] && [[ -f "${dir}/pyproject.toml" ]]
-}
-
 ensure_dimos_clone() {
   local dimos_dir="$1"
+  local bootstrap_python="$2"
 
-  if is_dimos_source_tree "${dimos_dir}"; then
+  if "${bootstrap_python}" "${ROOT}/launcher/app/dimos_installation.py" "${dimos_dir}"; then
     echo "Reusing existing DimOS clone: ${dimos_dir}" >&2
     checkout_dimos_ref "${dimos_dir}"
     printf '%s\n' "${dimos_dir}"
@@ -287,15 +302,22 @@ checkout_dimos_ref() {
   [[ -n "${ref}" ]] || return 0
   echo "Checking out DimOS ref: ${ref}" >&2
   git -C "${dimos_dir}" fetch --tags origin 1>&2
-  git -C "${dimos_dir}" checkout "${ref}" 1>&2
+  # The chooser lists remote branch names, which may have stale local branches.
+  if git -C "${dimos_dir}" show-ref --verify --quiet "refs/remotes/origin/${ref}"; then
+    ref="refs/remotes/origin/${ref}"
+  fi
+  local commit
+  commit="$(git -C "${dimos_dir}" rev-parse --verify --end-of-options "${ref}^{commit}")"
+  git -C "${dimos_dir}" checkout --detach "${commit}" 1>&2
 }
 
 install_dimos_from_clone() {
   local dimos_dir="$1"
   local bootstrap_python="$2"
+  dimos_dir="$(absolute_setup_path "${dimos_dir}")"
   local dimos_python="${dimos_dir}/.venv/bin/python3"
 
-  ensure_dimos_clone "${dimos_dir}" >/dev/null
+  ensure_dimos_clone "${dimos_dir}" "${bootstrap_python}" >/dev/null
   if [[ ! -x "${dimos_python}" ]]; then
     "${bootstrap_python}" -m venv "${dimos_dir}/.venv"
   fi
@@ -309,24 +331,15 @@ resolve_dimos_python() {
   local dimos_dir=""
 
   if [[ -n "${FLAG_DIMOS_PYTHON}" ]]; then
+    FLAG_DIMOS_PYTHON="$(absolute_setup_path "${FLAG_DIMOS_PYTHON}")"
     if [[ ! -x "${FLAG_DIMOS_PYTHON}" ]]; then
       echo "Not executable: ${FLAG_DIMOS_PYTHON}" >&2
       exit 1
     fi
     if ! python_has_dimos "${FLAG_DIMOS_PYTHON}"; then
       echo "Warning: not a DimOS environment (no 'dimos' package): ${FLAG_DIMOS_PYTHON}" >&2
-      echo "Looking for an installed DimOS Python instead…" >&2
-      if found="$(
-        unset DIMOS_PYTHON
-        find_dimos_python "${ROOT}" 2>/dev/null
-      )"; then
-        echo "Using detected DimOS Python: ${found}" >&2
-        FLAG_DIMOS_PYTHON="${found}"
-      else
-        echo "No DimOS install found." >&2
-        echo "Pass a DimOS venv python (…/dimos/.venv/bin/python3), or use --clone-dir / the launcher Download option." >&2
-        exit 1
-      fi
+      echo "Select a DimOS environment or use --clone-dir." >&2
+      exit 1
     fi
     DIMOS_ENV_PYTHON="${FLAG_DIMOS_PYTHON}"
     return 0
@@ -334,10 +347,10 @@ resolve_dimos_python() {
 
   if [[ -n "${FLAG_CLONE_DIR}" ]]; then
     if ! bootstrap_python="$(find_python_for_venv)"; then
-      echo "Could not find Python 3.12+ on PATH. Install Python 3.12+ and re-run ./launcher/scripts/setup.sh." >&2
+      echo "Could not find Python 3.12 on PATH. Install Python 3.12 and re-run ./launcher/scripts/setup.sh." >&2
       exit 1
     fi
-    FLAG_DIMOS_REF="${FLAG_DIMOS_REF:-main}"
+    FLAG_DIMOS_REF="${FLAG_DIMOS_REF:-$(cat "${ROOT}/.dimos-revision")}"
     install_dimos_from_clone "${FLAG_CLONE_DIR}" "${bootstrap_python}"
     return 0
   fi
@@ -366,12 +379,12 @@ resolve_dimos_python() {
   fi
 
   if ! bootstrap_python="$(find_python_for_venv)"; then
-    echo "Could not find Python 3.12+ on PATH. Install Python 3.12+ and re-run ./launcher/scripts/setup.sh." >&2
+    echo "Could not find Python 3.12 on PATH. Install Python 3.12 and re-run ./launcher/scripts/setup.sh." >&2
     exit 1
   fi
 
   dimos_dir="$(prompt_with_default "Where should DimOS be cloned?" "${DEFAULT_DIMOS_DIR}")"
-  FLAG_DIMOS_REF="$(prompt_with_default "DimOS git ref (branch, tag, or SHA)?" "${FLAG_DIMOS_REF:-main}")"
+  FLAG_DIMOS_REF="$(prompt_with_default "DimOS git ref (branch, tag, or SHA)?" "${FLAG_DIMOS_REF:-$(cat "${ROOT}/.dimos-revision")}")"
   install_dimos_from_clone "${dimos_dir}" "${bootstrap_python}"
 }
 
@@ -383,6 +396,10 @@ DIMOS_INSTALL_SOURCE=""
 DIMOS_ENV_PYTHON=""
 resolve_dimos_python
 
+if ! python_is_312 "${DIMOS_ENV_PYTHON}"; then
+  echo "DimOS AR requires Python 3.12. Select a Python 3.12 environment or a new clone directory." >&2
+  exit 1
+fi
 echo "Using DimOS Python: ${DIMOS_ENV_PYTHON}"
 
 echo "Installing dimos-ar into that environment..."

@@ -67,7 +67,7 @@ def test_audio_dependencies_are_declared_and_real_decoder_handles_browser_audio(
 
     project = tomllib.loads((Path(__file__).resolve().parents[3] / "pyproject.toml").read_text())["project"]
     dependencies = {Requirement(value).name for value in project["dependencies"]}
-    assert {"ffmpeg-python", "soundfile"} <= dependencies
+    assert "av" in dependencies
     speech = {Requirement(value).name for value in project["optional-dependencies"]["speech"]}
     assert "faster-whisper" in speech
     data = io.BytesIO()
@@ -96,7 +96,6 @@ async def test_lazy_installed_pipeline_prepares_once_and_returns_only_current_te
         return source, source.pipe(ops.map(lambda _audio: " go home "))
 
     monkeypatch.setattr(pipeline, "whisper_pipeline", fake_pipeline)
-    monkeypatch.setattr(decoder, "ffmpeg_requirement", lambda: None)
     monkeypatch.setattr(decoder, "decode_audio_bytes", lambda _raw: SimpleNamespace(
         data=[0] * 160, sample_rate=16000,
     ))
@@ -117,7 +116,6 @@ async def test_lazy_installed_pipeline_prepares_once_and_returns_only_current_te
 async def test_decoded_duration_is_bounded_before_loading_a_model(monkeypatch):
     import dimos.stream.audio.decode as decoder
 
-    monkeypatch.setattr(decoder, "ffmpeg_requirement", lambda: None)
     monkeypatch.setattr(decoder, "decode_audio_bytes", lambda _raw: SimpleNamespace(
         data=range(16000 * 30 + 1), sample_rate=16000,
     ))
@@ -202,7 +200,6 @@ async def test_non_agent_hello_does_not_advertise_dictation():
 async def test_missing_local_backend_is_not_advertised_or_admitted(monkeypatch):
     from dimos.ar.websocket import speech
 
-    monkeypatch.setattr(speech.shutil, "which", lambda _tool: "/test/bin/ffmpeg")
     monkeypatch.setattr(speech, "find_spec", lambda module:
                         None if module in {"whisper", "faster_whisper"} else object())
     harness = ServerHarness()

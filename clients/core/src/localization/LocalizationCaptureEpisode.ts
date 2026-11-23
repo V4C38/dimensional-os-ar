@@ -239,7 +239,12 @@ export class LocalizationCaptureEpisode {
   }
 
   requestCorrection(): void {
-    if (!["idle", "failed", "waiting_for_retry"].includes(this.episode.phase)) return;
+    if (!["idle", "failed", "waiting_for_retry"].includes(this.episode.phase)) {
+      if (this.request?.capture_policy === "robot_los_preferred") {
+        this.session.sendText(encodeLocalizationStartRequest());
+      }
+      return;
+    }
     this.requestStart();
   }
 

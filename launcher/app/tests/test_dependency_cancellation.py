@@ -50,16 +50,16 @@ async def test_stop_cancels_post_install_check(runtime, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_spawn_error_is_a_structured_api_failure(monkeypatch):
+async def test_spawn_error_is_a_structured_api_failure(app_context, monkeypatch):
     from fastapi import HTTPException
 
     import app
 
-    monkeypatch.setattr(app.robot_profiles, "snapshot", lambda *args: {})
-    monkeypatch.setattr(app.manager, "start_armodule", AsyncMock(side_effect=OSError("missing script")))
+    monkeypatch.setattr(app_context.robot_profiles, "snapshot", lambda *args: {})
+    monkeypatch.setattr(app_context.manager, "start_armodule", AsyncMock(side_effect=OSError("missing script")))
     body = app.StartBody(profile_id="profile", blueprint="unitree_go2_ar",
                          source={"mode": "manual", "address": "10.0.0.1"})
     with pytest.raises(HTTPException) as error:
-        await app.api_armodule_start(body)
+        await app.api_armodule_start(body, context=app_context)
     assert error.value.status_code == 500
     assert "missing script" in error.value.detail

@@ -13,6 +13,8 @@ Install the official Python MCP SDK into your chosen tools environment and activ
 python3 clients/specs/tools/review.py
 ```
 
+Native reviews refuse to start while macOS reports elevated memory pressure. Close heavy DimOS/viewer workloads before cold Lens imports on memory-constrained hosts. The editor launcher applies the verified Rosetta AOT bypass on each launch.
+
 The default `--suite all` runs the golden and regression suites plus the manipulation
 and navigation-overlap probes. Use `--suite golden` or
 `--suite regression` for diagnosis. The golden path follows the shared

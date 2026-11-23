@@ -19,6 +19,12 @@ class ManipulationAssetsTests(unittest.TestCase):
         source = (ROOT / "clients/specs/Assets/Scripts/DimOSSpecsClient/manipulation/OpenYAMMesh.ts").read_text()
         actual = json.loads(source.split(" = ", 1)[1].removesuffix(";\n"))
         self.assertEqual(actual, expected)
+        fixture = json.loads(
+            (ROOT / "clients/webxr/tests/integration-tests/fixtures/OpenYAM.json").read_text()
+        )["model"]
+        self.assertEqual(actual["signature"], fixture["visual_signature"])
+        visual_links = {link["name"] for link in fixture["links"] if link["bounds"]}
+        self.assertEqual(set(actual["links"]), visual_links)
         for link in actual["links"].values():
             self.assertEqual(len(link["indices"]) % 3, 0)
             self.assertLess(max(link["indices"]), len(link["positions"]) // 3)

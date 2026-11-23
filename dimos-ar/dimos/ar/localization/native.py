@@ -31,8 +31,8 @@ class NativeMapSample:
 class NativeMapAdapter:
     """Read native world<-map TF; identical periodic republishes are not new fixes.
 
-    The owning source session supplies the map identity and disposes this adapter
-    together with its TF buffer when that source or configured map changes.
+    Keep the last handled registration across AR odometry reference changes so
+    periodic native republishes cannot reapply the retired placement.
     """
 
     def __init__(
@@ -45,15 +45,6 @@ class NativeMapAdapter:
         self._map_frame = map_frame
         self._previous: NDArray[np.float64] | None = None
         self._task: asyncio.Task[None] | None = None
-        self._retired = False
-
-    def reset(self) -> None:
-        """Retire this source; its native map pipeline must restart before reuse.
-
-        Upstream republishes old fixes with fresh timestamps, so timestamp fences
-        cannot prove a registration belongs to a replacement odometry source.
-        """
-        self._retired = True
 
     def start(
         self, buffer: NativeTransformBuffer, on_sample: Callable[[NativeMapSample], bool]
@@ -76,15 +67,14 @@ class NativeMapAdapter:
         self, buffer: NativeTransformBuffer, on_sample: Callable[[NativeMapSample], bool]
     ) -> None:
         while True:
+            previous = self._previous
             sample = self.poll(buffer)
             if sample is not None and not on_sample(sample):
-                # A fix offered before odometry is ready must be retried.
-                self._previous = None
+                # Retry unhandled updates without forgetting the previous registration.
+                self._previous = previous
             await asyncio.sleep(0.1)
 
     def poll(self, buffer: NativeTransformBuffer) -> NativeMapSample | None:
-        if self._retired:
-            return None
         transform = buffer.get(self._world_frame, self._map_frame, warn=False)
         if transform is None or not math.isfinite(transform.ts):
             return None
@@ -103,7 +93,9 @@ class NativeMapAdapter:
         ):
             return None
         # DimOS publishes T_world_map, while our owner accepts T_native_odom.
-        normalized = normalize_pose_estimate(np.linalg.inv(matrix), max_tilt_rad=math.radians(5))
+        normalized = normalize_pose_estimate(
+            np.asarray(np.linalg.inv(matrix), dtype=np.float64), max_tilt_rad=math.radians(5)
+        )
         if normalized is None:
             return None
         native_odom = normalized

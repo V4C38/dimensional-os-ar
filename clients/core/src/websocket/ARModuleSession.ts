@@ -100,6 +100,7 @@ export interface ARModuleSessionState {
   readonly interaction?: ReadonlyFacts<InteractionState> | null;
   readonly connection: ConnectionPhase;
   readonly hasTrackingOrigin: boolean;
+  readonly baseSighting?: ClientTrackingOriginStore["baseSighting"];
   readonly hasRetainedTrackingOrigin?: boolean;
   readonly alignmentRequired?: boolean;
   readonly hello: ReadonlyFacts<Hello> | null;
@@ -147,7 +148,8 @@ class ControlChannelScheduler {
 
   receive(line: string): void {
     const type = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1];
-    if (this.ready() && type && ["state", "pose", "manipulation_state", "interaction_state", "presence_state"].includes(type)) {
+    const linkSnapshot = type === "state" && /"robot_link"\s*:/.test(line);
+    if (this.ready() && type && !linkSnapshot && ["state", "pose", "manipulation_state", "interaction_state", "presence_state"].includes(type)) {
       if (this.inbound.has(type)) this.coalesced++;
       this.inbound.set(type, line);
       return;
@@ -538,6 +540,7 @@ export class ARModuleSession {
       interaction: this.collaboration.raw(),
       connection: this.phase,
       hasTrackingOrigin: this.clientTrackingOriginStore.hasTrackingOrigin,
+      baseSighting: this.clientTrackingOriginStore.baseSighting,
       ...(this.retainedOrigin ? { hasRetainedTrackingOrigin: true } : {}),
       ...(this.alignmentRequired ? { alignmentRequired: true } : {}),
       hello: this.hello,
@@ -553,7 +556,7 @@ export class ARModuleSession {
       agentMessage: this.agentMessage,
       robotTelemetry: this.robotTelemetry,
       localizationNotice: this.robotTelemetry === "unavailable"
-        ? "Robot telemetry unavailable. Waiting to localize."
+        ? "Robot telemetry unavailable."
         : this.clock.now() < this.localizationNoticeUntil
           ? "VPS could not localize. Look at the robot marker." : null,
       agentMessageRevision: this.agentMessageRevision,
@@ -699,11 +702,20 @@ export class ARModuleSession {
         break;
       case "state":
         this.state = message;
+        if (message.robot_link) {
+          const { status, motion_ready } = message.robot_link;
+          this.robotTelemetry = status === "online" ? "available" : status === "offline" ? "unavailable" : "waiting";
+          if (!motion_ready) this.control.clear();
+        }
         break;
-      case "pose":
+      case "pose": {
+        const link = this.state?.robot_link;
+        if (link && (link.status !== "online" || message.source_generation !== link.source_generation)) return;
         this.pose = message;
+        if (this.clientTrackingOriginStore.hasTrackingOrigin) this.clientTrackingOriginStore.retireBaseSighting(message.ts);
         this.robotTelemetry = "available";
         break;
+      }
       case "localization_context": {
         if (message.odom_reference_id !== this.hello?.odom_reference_id) return;
         const previous = this.clientTrackingOriginStore.sharedFrameContext;
@@ -729,12 +741,13 @@ export class ARModuleSession {
         if (message.episode_id !== undefined) {
           if (message.episode_id !== this.captureEpisodeId) return;
           if (message.ts !== undefined && !this.localizationSubmission.accept(message.ts, this.clock.now())) return;
+          if (message.base_sighting) this.clientTrackingOriginStore.recordBaseSighting(message.base_sighting);
           this.cancelLocalizationSubmission();
           this.captureEpisodeId = null;
         }
-        if (message.scope === "robot" && message.episode_id === undefined) {
+        if (!this.state?.robot_link && message.scope === "robot" && message.episode_id === undefined) {
           if (message.reason === "robot_pose_available") this.robotTelemetry = "available";
-          if (message.reason === "robot_pose_unavailable" && this.robotTelemetry === "available") {
+          if (message.reason === "robot_pose_unavailable") {
             this.robotTelemetry = "unavailable";
           }
         }

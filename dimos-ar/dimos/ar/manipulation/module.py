@@ -22,6 +22,7 @@ class ARManipulationModuleConfig(ManipulationModuleConfig):  # type: ignore[misc
     model_asset_url: str | None = None
     model_visual_profile: str | None = None
     gripper_joint_names: list[str] = Field(default_factory=list)
+    reversed_feedback_joint_limits: dict[str, tuple[float, float]] = Field(default_factory=dict)
     gripper_open_at_lower: list[str] = Field(default_factory=list)
     wire_from_world: ReferencePose = Field(default_factory=ReferencePose)
     joint_arrival_tolerance_rad: float = Field(default=0.02, gt=0, le=0.1)
@@ -120,19 +121,34 @@ class ARManipulationModule(ManipulationModule):  # type: ignore[misc]
         aliases = self.config.joint_state_aliases
         indices = {aliases.get(name, name): i for i, name in enumerate(msg.name)}
         names = self.config.model.joint_names
-        if all(name in indices and indices[name] < len(msg.position) for name in names):
-            values = [msg.position[indices[name]] for name in names]
-            if all(math.isfinite(q) for q in values) and math.isfinite(msg.ts):
-                self._adapter.feedback = JointState(
-                    ts=msg.ts,
-                    name=list(names),
-                    position=values,
-                    velocity=[msg.velocity[indices[n]] for n in names]
-                    if len(getattr(msg, "velocity", [])) == len(msg.name)
-                    and all(math.isfinite(v) for v in msg.velocity)
-                    else [],
-                )
-                super()._on_joint_state(msg)
+        if (
+            len(indices) != len(msg.name)
+            or len(msg.position) != len(msg.name)
+            or not all(name in indices for name in names)
+            or not math.isfinite(msg.ts)
+            or not all(math.isfinite(q) for q in msg.position)
+        ):
+            self._adapter.feedback = None
+            return
+        values = [msg.position[indices[name]] for name in names]
+        velocities = (
+            [msg.velocity[indices[name]] for name in names]
+            if len(getattr(msg, "velocity", [])) == len(msg.name)
+            and all(math.isfinite(v) for v in msg.velocity)
+            else []
+        )
+        for i, name in enumerate(names):
+            if name in self.config.reversed_feedback_joint_limits:
+                lower, upper = self.config.reversed_feedback_joint_limits[name]
+                if not lower <= values[i] <= upper:
+                    self._adapter.feedback = None
+                    return
+                values[i] = lower + (upper - values[i])
+                if velocities:
+                    velocities[i] = -velocities[i]
+        state = JointState(ts=msg.ts, name=list(names), position=values, velocity=velocities)
+        self._adapter.feedback = state
+        super()._on_joint_state(state)
 
     @rpc
     def ar_manipulation_command(self, client_id: str, request: dict[str, Any]) -> dict[str, Any]:

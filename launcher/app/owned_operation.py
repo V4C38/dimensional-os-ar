@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, TypeVar
+
+Result = TypeVar("Result")
 
 
 class OwnedOperation:
@@ -16,12 +18,13 @@ class OwnedOperation:
     def running(self) -> bool:
         return self.task is not None and not self.task.done()
 
-    def start(self, work: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+    def start(self, work: Coroutine[Any, Any, Result]) -> asyncio.Task[Result]:
         if self.running:
             work.close()
             raise RuntimeError("another dependency operation is already running")
-        self.task = asyncio.create_task(work)
-        return self.task
+        task = asyncio.create_task(work)
+        self.task = task
+        return task
 
     async def cancel(self) -> None:
         task, self.task = self.task, None

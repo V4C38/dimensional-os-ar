@@ -18,9 +18,8 @@ export function replayPreferenceKey(robot) {
 
 /** Metadata comes from the launcher; this owner keeps only the user's selection. */
 export class LaunchConfiguration {
-  constructor({ blueprint = "", client = "webxr" } = {}) {
+  constructor({ blueprint = "" } = {}) {
     this._blueprint = blueprint;
-    this._client = client;
     this.selectionRevision = 0;
     this.blueprints = new Map();
     this.logLevels = [];
@@ -35,14 +34,12 @@ export class LaunchConfiguration {
   }
 
   get blueprint() { return this._blueprint; }
-  get client() { return this._client; }
   selectBlueprint(id) {
     if (this.blueprints.size && !this.blueprints.has(id)) return false;
     if (id !== this._blueprint) this.selectionRevision++;
     this._blueprint = id;
     return true;
   }
-  selectClient(client) { this._client = client; }
 
   get spec() { return this.blueprints.get(this.blueprint) ?? null; }
   get robot() { return this.spec?.robot ?? null; }
@@ -75,6 +72,7 @@ export class HardwareDiscovery {
     this.request = (path, options) => request(path, options);
     this.requests = new ScopedRequests();
     this.canStatus = { ready: false, state: "checking", message: "Checking can0…" };
+    this.canIdentity = null;
     this.plannerStatus = { ready: false, state: "checking", message: "Checking manipulation dependencies…" };
     this.resolvedCan = "can0";
     this.go2DiscoveryState = { text: "Not scanned", phase: "" };
@@ -111,6 +109,13 @@ export class HardwareDiscovery {
   }
 
   refreshCan({ enabled, scope, interface: name, changed }) {
+    const identity = JSON.stringify([scope(), name]);
+    if (identity !== this.canIdentity) {
+      this.canIdentity = identity;
+      this.requests.cancel("can");
+      this.canStatus = { ready: false, state: "checking", message: `Checking ${name}…` };
+      changed();
+    }
     if (!enabled || this.requests.busy("can") || this.requests.busy("canSetup")) return;
     return this.run("can", scope,
       () => this.json(`/api/can/status?interface=${encodeURIComponent(name)}`, "CAN status check failed"),
@@ -142,17 +147,16 @@ export class HardwareDiscovery {
     }, changed);
   }
 
-  discover({ enabled, robot, auto, scope, progress, received, changed }) {
+  discover({ enabled, robot, auto, scope, received, changed }) {
     if (!enabled || this.requests.busy("discovery")) return;
     return this.run("discovery", scope, () => {
       if (robot === "unitree_go2") this.go2DiscoveryState = { text: "Scanning…", phase: "checking" };
-      progress({ phase: "checking" });
       changed();
       return this.json(`/api/discovery?robot=${robot}`, "Discovery failed");
     }, data => {
       this.discoveredRobots[replayRobot(robot)] = data.devices;
       if (robot === "openyam" && auto()) {
-        const next = data.devices.length === 1 ? data.devices[0].address : "can0";
+        const next = data.devices[0]?.address ?? "can0";
         if (next !== this.resolvedCan) {
           this.resolvedCan = next;
           this.requests.cancel("can");
@@ -164,9 +168,8 @@ export class HardwareDiscovery {
         phase: data.devices.length ? "ready" : "needs_setup",
       };
       received(data);
-    }, error => {
+    }, () => {
       if (robot === "unitree_go2") this.go2DiscoveryState = { text: "Discovery failed", phase: "error" };
-      progress({ phase: "error", error });
     }, changed);
   }
 }

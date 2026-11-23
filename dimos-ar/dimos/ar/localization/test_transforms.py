@@ -106,3 +106,25 @@ def test_yaw_from_transform_matches_pose_yaw() -> None:
     transform = matrix_from_position_and_yaw((0.0, 0.0, 0.0), yaw)
 
     assert yaw_from_transform(transform) == pytest.approx(yaw, abs=1e-6)
+
+
+def test_anchored_fusion_is_invariant_to_tracking_origin_shift() -> None:
+    first = matrix_from_position_and_yaw((0.0, 0.0, 0.0), 0.0)
+    second = matrix_from_position_and_yaw((0.02, 0.0, 0.0), math.radians(4))
+    anchor = np.array([1.0, 0.0, 0.4])
+    shift = np.eye(4)
+    shift[:3, 3] = [15.0, 0.0, 0.0]
+    tolerances = {
+        "max_tilt_rad": math.radians(5),
+        "max_position_residual_m": 0.35,
+        "max_yaw_residual_rad": math.radians(12),
+    }
+    original = fuse_pose_estimates([first, second], anchors=[anchor, anchor], **tolerances)
+    shifted = fuse_pose_estimates(
+        [first @ shift, second @ shift],
+        anchors=[anchor - shift[:3, 3], anchor - shift[:3, 3]],
+        **tolerances,
+    )
+    assert original is not None and shifted is not None
+    assert original.inlier_indices == shifted.inlier_indices == (0, 1)
+    np.testing.assert_allclose(original.transform @ shift, shifted.transform, atol=1e-9)
