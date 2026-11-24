@@ -18,6 +18,7 @@ import type { JoystickAxes } from "@dimos-ar-client/navigation/NavigationCommand
 import type { ScrollableTextView } from "../presentation/TextViews";
 import { MainMenuView } from "../presentation/MainMenuView";
 
+import { WebXRNavigationMap, type NavigationMapPorts } from "../navigation/WebXRNavigationMap";
 import { InteractionSoundController } from "../presentation/InteractionSoundController";
 
 
@@ -40,13 +41,17 @@ export interface WebXRInputPorts {
   robot: Pick<WebXRRobotPresenter, "object" | "collider" | "markerCollider" | "floorWorldY" | "ownsTarget" | "setHovered">;
   ui: Pick<WebXRUIPresenter,
     "snapshot" | "setupCompleted" | "alignmentReview" | "menuOpen" | "debugEnabled" |
-    "surfaceCount" | "nextSetup" | "previousSetup" | "retryConnection" | "toggleMenu" |
+    "surfaceCount" | "navMapEnabled" | "navMapClickToWalk" | "nextSetup" | "previousSetup" | "retryConnection" | "toggleMenu" |
     "setOperatingMode" | "setLidarMode" | "adjustLidarRange" | "adjustLidarPoints" |
     "dismissAlignmentReview" | "restartLocalization">;
   speech: Pick<AgentDraftSession, "snapshot" | "beginRecording" | "setDraft" | "submitTyped">;
-  originStore: { readonly hasTrackingOrigin: boolean };
+  originStore: { readonly hasTrackingOrigin: boolean; readonly T_map_tracking?: { readonly shared_frame_id: string; readonly odom_reference_id: string; readonly orientation: readonly number[] } | null };
   session: { view(): { capabilities: { navigation: { available: boolean } } | null } };
   joystick: { loseInput(): void };
+  navigationMapPorts?: NavigationMapPorts;
+  navigationMapAvailable?(): boolean;
+  navigationMapCanSend?(): boolean;
+  navigationMapCanCancel?(): boolean;
   restartSetup(): void;
   realign(): void;
   cameraPreview(): CameraPreviewFrame | null;
@@ -65,6 +70,7 @@ export interface WebXRInputPorts {
 
 type InputSource = xb.SelectEvent["target"];
 type PrimaryGesture =
+  | { kind: "navigationMap"; source: InputSource; target: THREE.Object3D; direct: boolean }
   | { kind: "navigation"; source: InputSource; fromMarker: boolean }
   | { kind: "arm"; source: InputSource }
   | { kind: "armPanel"; source: InputSource; grip: boolean }
@@ -79,6 +85,7 @@ type TouchContact = { object: THREE.Mesh; point: THREE.Vector3; distance: number
 /** One semantic owner; SDK ray/direct captures are mechanisms retired by its lifecycle. */
 export class WebXRInputSession {
   private primary: PrimaryGesture | null = null;
+  get navigationMapHold() { return this.primary?.kind === "navigationMap" ? this.primary : null; }
   get worldHold() { return this.primary?.kind === "navigation" ? this.primary.source : null; }
   get holdFromMarker() { return this.primary?.kind === "navigation" && this.primary.fromMarker; }
   get panelHold() { return this.primary?.kind === "panel" ? this.primary.source : null; }
@@ -88,7 +95,8 @@ export class WebXRInputSession {
   get speedHold() { return this.primary?.kind === "slider" ? this.primary.object : null; }
   get speedDrag() { return this.primary?.kind === "slider" ? this.primary.drag : null; }
   get scrollHold() { return this.primary?.kind === "scroll" ? this.primary : null; }
-  get uiGrab() { return !!this.primary && ["ui", "slider", "scroll", "panel"].includes(this.primary.kind); }
+  get hasActiveGesture() { return this.primary !== null; }
+  get uiGrab() { return !!this.primary && ["ui", "slider", "scroll", "panel", "navigationMap"].includes(this.primary.kind); }
   private secondaryPressed = false;
   private readonly pressEdges = new ManipulationPressEdges();
   private readonly manipulationCapture = new ManipulationInputCapture();
@@ -109,6 +117,10 @@ export class WebXRInputSession {
     if (this.capture.owner !== gesture.source) return false;
     this.primary = gesture;
     return true;
+  }
+  transferMap(source: InputSource, target: THREE.Object3D, direct: boolean): void {
+    this.capture.transfer(source);
+    this.primary = { kind: "navigationMap", source, target, direct };
   }
   cancelNavigation(): void {
     if (this.primary?.kind !== "navigation") return;
@@ -176,6 +188,16 @@ export class PanelInputPresenter {
   constructor(private readonly ui: WebXRInputPorts["ui"], private readonly menu: () => MainMenuView | null,
     private readonly holdingPanel: () => boolean, private readonly captured: () => boolean) {}
   detachAnchor(): void { this.menuAnchor.detach(); this.palmOpened = false; }
+  offsetForNavigationMapResize(deltaRadius: number): void {
+    const menu = this.menu();
+    if (!menu) return;
+    const panel = menu.panel;
+    const { yaw } = menu.navigationMapDock();
+    const offset = new THREE.Vector3(-Math.sin(yaw) * deltaRadius, 0, -Math.cos(yaw) * deltaRadius);
+    this.menuAnchor.shift(offset);
+    const world = panel.getWorldPosition(new THREE.Vector3()).add(offset);
+    panel.position.copy(panel.parent ? panel.parent.worldToLocal(world) : world);
+  }
   inputSourcesChanged(session: XRSession | null): void {
     this.session = session;
     for (const [handedness, gate] of this.palmGates) {
@@ -198,12 +220,12 @@ export class PanelInputPresenter {
     const menu = Boolean(summoner);
     if (menu && !this.menuWasPressed) {
       this.ui.toggleMenu();
-      if (this.ui.menuOpen && summoner) this.anchorMenu(summoner, frame, reference, p, q);
+      if (this.ui.menuOpen && summoner) this.anchorMenu(summoner, frame, reference, p);
       else this.menuAnchor.detach();
       this.palmOpened = false;
     }
     this.menuWasPressed = menu;
-    this.syncPalm(frame, reference, p, q);
+    this.syncPalm(frame, reference, p);
     const snap = this.ui.snapshot();
     const reviewVisible = snap.alignmentReview?.pending === true;
     const setupVisible = !snap.setupCompleted || snap.setupCelebrating === true || reviewVisible;
@@ -217,8 +239,8 @@ export class PanelInputPresenter {
     } else {
       if (visible && !this.menuWasVisible && !this.menuAnchor.source) this.placeMenuInFront(p, q);
       if (visible && this.menuAnchor.source && !this.holdingPanel()) {
-        const position = this.anchorPosition(this.menuAnchor.source, frame, reference);
-        if (position && this.menu()) this.menuAnchor.update(position, new THREE.Vector3(p.x, p.y, p.z), this.menu()!.panel, deltaS);
+        const pose = this.anchorPose(this.menuAnchor.source, frame, reference);
+        if (pose && this.menu()) this.menuAnchor.update(pose.position, new THREE.Vector3(p.x, p.y, p.z), this.menu()!.panel, deltaS, pose.orientation);
       }
     }
     this.setupWasVisible = setupVisible;
@@ -246,20 +268,22 @@ export class PanelInputPresenter {
     panel.quaternion.slerp(rotation, alpha);
   }
 
-  private anchorPosition(source: XRInputSource, frame: XRFrame, reference: XRReferenceSpace): THREE.Vector3 | null {
+  private anchorPose(source: XRInputSource, frame: XRFrame, reference: XRReferenceSpace): { position: THREE.Vector3; orientation: THREE.Quaternion } | null {
     const wrist = source.hand?.get("wrist");
     const pose = wrist ? frame.getJointPose?.(wrist, reference) : frame.getPose?.(source.gripSpace ?? source.targetRaySpace, reference);
-    const p = pose?.transform.position;
-    return p ? new THREE.Vector3(p.x, p.y, p.z) : null;
+    if (!pose) return null;
+    const { position, orientation } = pose.transform;
+    return { position: new THREE.Vector3(position.x, position.y, position.z),
+      orientation: new THREE.Quaternion(orientation.x, orientation.y, orientation.z, orientation.w) };
   }
 
-  private anchorMenu(source: XRInputSource, frame: XRFrame, reference: XRReferenceSpace, eye: DOMPointReadOnly, rotation: DOMPointReadOnly): void {
-    const position = this.anchorPosition(source, frame, reference);
-    if (!position || !this.menu()) return;
-    this.menuAnchor.attach(source, position, new THREE.Vector3(eye.x, eye.y, eye.z), new THREE.Quaternion(rotation.x, rotation.y, rotation.z, rotation.w), this.menu()!.panel);
+  private anchorMenu(source: XRInputSource, frame: XRFrame, reference: XRReferenceSpace, eye: DOMPointReadOnly): void {
+    const pose = this.anchorPose(source, frame, reference);
+    if (!pose || !this.menu()) return;
+    this.menuAnchor.attach(source, pose.position, new THREE.Vector3(eye.x, eye.y, eye.z), pose.orientation, this.menu()!.panel);
   }
 
-  private syncPalm(frame: XRFrame, reference: XRReferenceSpace, eye: DOMPointReadOnly, rotation: DOMPointReadOnly): void {
+  private syncPalm(frame: XRFrame, reference: XRReferenceSpace, eye: DOMPointReadOnly): void {
     const sources = Array.from(this.session?.inputSources ?? []).filter(source => source.hand);
     for (const source of sources) {
       const gate = this.palmGates.get(source.handedness) ?? new PalmMenuGate();
@@ -274,7 +298,7 @@ export class PanelInputPresenter {
       if (!this.ui.setupCompleted || this.ui.alignmentReview?.pending) continue;
       if (changed && gate.isOpen && !this.ui.menuOpen) {
         this.ui.menuOpen = true;
-        this.anchorMenu(source, frame, reference, eye, rotation);
+        this.anchorMenu(source, frame, reference, eye);
         this.palmOpened = true;
       } else if (!gate.isOpen && this.palmOpened && this.menuAnchor.source === source && !this.captured()) {
         this.ui.menuOpen = false;
@@ -291,6 +315,9 @@ export class WebXRInputController {
   readonly sound = new InteractionSoundController();
   private disposed = false;
   private mainMenu: MainMenuView | null = null;
+  private map: WebXRNavigationMap | null = null;
+  private mapSecondHand: { source: InputSource; target: THREE.Object3D; direct: boolean } | null = null;
+  private joystickNeedsNeutral = false;
   readonly gestures = new WebXRInputSession((source, contact, start, cancelled) => this.dispatchTouch(source, contact, start, cancelled));
   private detectedSurfaces: FloorPlane[] = [];
   private readonly placementBlocker = new THREE.Object3D();
@@ -373,6 +400,8 @@ export class WebXRInputController {
       onRobot: () => client.toggleRobotSelection(),
       manipulationSpeed: () => client.manipulation.interaction.speedScale,
       onDebug: () => { client.ui.debugEnabled = !client.ui.debugEnabled; },
+      onMapToggle: () => { client.ui.navMapEnabled = !client.ui.navMapEnabled; },
+      onMapClickToggle: () => { client.ui.navMapClickToWalk = !client.ui.navMapClickToWalk; },
       onLidarMode: mode => client.ui.setLidarMode(mode),
       onLidarRange: direction => client.ui.adjustLidarRange(direction),
       onLidarPoints: direction => client.ui.adjustLidarPoints(direction),
@@ -389,12 +418,17 @@ export class WebXRInputController {
       onActivate: () => this.sound.play("activate"),
     });
     this.scene.add(this.mainMenu.panel);
+    if (client.navigationMapPorts) {
+      this.map = new WebXRNavigationMap(client.navigationMapPorts);
+      this.mainMenu.panel.add(this.map.object);
+    }
     this.interaction.setPolicy({
       eligible: (controller, object, point) => this.canInteract(controller, object, point),
       ignored: (controller, object) => this.client.robot.ownsTarget(object) && this.client.navigation.interaction.ownsDraft(this.navigationSourceId(controller)),
-      captured: controller => this.gestures.owner === controller && (this.gestures.uiGrab || this.gestures.worldHold === controller || this.gestures.manipulationHold === controller || this.gestures.panelHold === controller),
+      captured: controller => this.mapSecondHand?.source === controller ||
+        this.gestures.owner === controller && this.gestures.hasActiveGesture,
       unobstructed: (object, origin, point) => {
-        if (this.mainMenu?.ownsTarget(object)) return true;
+        if (this.mainMenu?.ownsTarget(object) || this.map?.owns(object)) return true;
         const direction = point.clone().sub(origin).normalize();
         const hit = navigationSurfaceHits(origin.toArray() as [number, number, number], direction.toArray() as [number, number, number], this.detectedSurfaces, this.client.robot.floorWorldY() ?? 0)[0];
         return !hit || new THREE.Vector3(...hit.position).distanceTo(origin) + 0.02 >= point.distanceTo(origin);
@@ -408,6 +442,16 @@ export class WebXRInputController {
     const snap = this.panels.update(this.session, frame, reference, p, q, deltaS);
     this.mainMenu?.apply(snap, this.client.speech.snapshot(), this.trackingState.microphone);
     this.mainMenu?.updateCameraPreview(this.client.cameraPreview(), deltaS);
+    if (this.map && this.mainMenu) {
+      const selected = this.client.isRobotSelected();
+      const open = this.tracking && snap.setupCompleted && !snap.setupCelebrating && snap.menuOpen &&
+        selected && snap.navMapEnabled !== false && this.client.navigationMapAvailable?.() === true;
+      const dock = this.mainMenu.navigationMapDock();
+      this.map.setClickToWalk(snap.navMapClickToWalk !== false);
+      this.map.update(open, selected, this.client.navigationMapCanSend?.() === true,
+        this.client.navigationMapCanCancel?.() === true, dock.lowerEdge, dock.yaw, time, deltaS);
+      this.map.setOrientation(new THREE.Quaternion(q.x, q.y, q.z, q.w), dock.yaw, this.client.originStore.T_map_tracking ?? null);
+    }
     this.navigationFloor.visible = this.client.navigationControlsEnabled() && this.client.session.view().capabilities?.navigation.available === true && this.client.robot.floorWorldY() !== null;
     this.navigationFloor.position.y = this.client.robot.floorWorldY() ?? 0;
     if (!this.markerControlsEnabled()) {
@@ -431,6 +475,33 @@ export class WebXRInputController {
     this.client.navigation.marker.update(new THREE.Vector3(p.x, p.y, p.z), hits.includes(this.client.navigation.marker.cancelObject));
     this.client.manipulation.renderer.controlsView.onRecalibrate ??= () => this.client.realign();
     this.mainMenu?.updateHover(hits, deltaS);
+    this.map?.updateHover(hits);
+    this.map?.setDebug(snap.debugEnabled);
+    if (this.gestures.navigationMapHold) {
+      const { source, target, direct } = this.gestures.navigationMapHold;
+      const ray = this.mapRay(source, direct);
+      if (ray && this.map?.capturing) {
+        const secondRay = this.mapSecondHand && this.mapRay(this.mapSecondHand.source, this.mapSecondHand.direct);
+        if (this.mapSecondHand && !secondRay) this.clearInput("tracking-lost");
+        else if (secondRay) this.map.holdScale(ray, secondRay);
+        else {
+          const previousRadius = this.map.physicalRadius;
+          this.map.hold(ray, time);
+          const deltaRadius = this.map.physicalRadius - previousRadius;
+          if (deltaRadius && this.mainMenu) {
+            this.panels.offsetForNavigationMapResize(deltaRadius);
+            const dock = this.mainMenu.navigationMapDock();
+            this.map.place(dock.lowerEdge, dock.yaw);
+          }
+        }
+        const point = this.map.pointer(ray, target);
+        if (point && !direct) this.interaction.capture(source, target, point);
+        if (secondRay && this.mapSecondHand && !this.mapSecondHand.direct) {
+          const secondPoint = this.map.pointer(secondRay, this.mapSecondHand.target);
+          if (secondPoint) this.interaction.capture(this.mapSecondHand.source, this.mapSecondHand.target, secondPoint);
+        }
+      } else this.clearInput("cancelled");
+    }
     this.client.manipulation.renderer.controlsView.frame.updateHover(hits, deltaS);
     const actionableHits = this.input.controllers.map(controller => {
       const hit = this.interaction.hit(controller);
@@ -458,7 +529,7 @@ export class WebXRInputController {
       const sourceId = this.navigationSourceId(pointer);
       if (!pointer.visible || pointer.userData.connected !== true) { this.client.navigation.clearAim(sourceId); continue; }
       connectedSources.add(sourceId);
-      if (this.gestures.worldHold === pointer || this.gestures.uiGrab && this.gestures.owner === pointer) continue;
+      if (this.gestures.navigationMapHold || this.gestures.worldHold === pointer || this.gestures.uiGrab && this.gestures.owner === pointer) continue;
       const target = this.interaction.hit(pointer)?.object;
       if (target === this.navigationFloor) {
         const ray = this.interaction.smoothedRay(pointer);
@@ -528,9 +599,12 @@ export class WebXRInputController {
 
   private canInteract(controller: xb.SelectEvent["target"], object: THREE.Object3D, point: THREE.Vector3): boolean {
     if (!this.tracking) return false;
+    const secondaryMap = this.gestures.navigationMapHold && this.gestures.owner !== controller &&
+      this.map?.owns(object);
     const secondaryGripper = this.gestures.manipulationHold && this.gestures.manipulationHold !== controller && !!controller.inputSource?.hand && object.userData.manipulationAction === "gripper";
-    if (this.gestures.owner && this.gestures.owner !== controller && !secondaryGripper && !["estop", "stop"].includes(object.userData.manipulationAction) && !this.mainMenu?.isEmergencyTarget(object) && !(object === this.navigationFloor && this.client.isRobotSelected())) return false;
+    if (this.gestures.owner && this.gestures.owner !== controller && !secondaryGripper && !secondaryMap && !["estop", "stop"].includes(object.userData.manipulationAction) && !this.mainMenu?.isEmergencyTarget(object) && !(object === this.navigationFloor && this.client.isRobotSelected())) return false;
     if (this.mainMenu?.ownsTarget(object)) return this.mainMenu.canInteract(object, point);
+    if (this.map?.owns(object)) return this.map.canInteract(object, point);
     if (object !== this.navigationFloor) {
       const origin = controller.getWorldPosition(new THREE.Vector3());
       const direction = point.clone().sub(origin).normalize();
@@ -561,6 +635,18 @@ export class WebXRInputController {
       this.client.emergencyStop();
       return;
     }
+    const firstMap = this.gestures.navigationMapHold;
+    if (firstMap && firstMap.source !== event.target && hit && this.map?.owns(hit.object) &&
+        this.map.canInteract(hit.object, hit.point)) {
+      const firstRay = this.mapRay(firstMap.source, firstMap.direct);
+      const direct = this.interaction.direct.isDirect(event.target);
+      const secondRay = this.mapRay(event.target, direct);
+      if (firstRay && secondRay && this.map.beginScale(firstRay, secondRay)) {
+        this.mapSecondHand = { source: event.target, target: hit.object, direct };
+        if (!direct) this.interaction.capture(event.target, hit.object, hit.point);
+      }
+      return;
+    }
     if (!hit || !this.canInteract(event.target, hit.object, hit.point)) return;
     if (hit.object.userData.manipulationAction === "stop") {
       this.clearInput("stop");
@@ -575,10 +661,23 @@ export class WebXRInputController {
       return;
     }
     if (!this.gestures.authorize(event.target, hit?.object)) return;
-    if (hit.object !== this.navigationFloor && hit.object !== this.placementBlocker) this.interaction.capture(event.target, hit.object, hit.point);
+    if (!this.interaction.direct.isDirect(event.target) && hit.object !== this.navigationFloor && hit.object !== this.placementBlocker) {
+      this.interaction.capture(event.target, hit.object, hit.point);
+    }
     this.interaction.direct.capture(event.target, hit.object,
       isDescendant(hit.object, this.client.navigation.marker.object) ? new THREE.Vector3(0, 1, 0) : undefined);
     if (this.gestures.panelHold || this.gestures.worldHold || this.gestures.manipulationHold || this.gestures.uiGrab) return;
+    if (this.map?.owns(hit.object)) {
+      const direct = this.interaction.direct.isDirect(event.target);
+      const ray = this.mapRay(event.target, direct);
+      if (ray && this.map.begin(hit.object, ray, hit.point, performance.now())) {
+        this.gestures.begin({ kind: "navigationMap", source: event.target, target: hit.object, direct });
+        this.client.navigation.clearAim();
+        this.client.joystick.loseInput();
+        this.joystickNeedsNeutral = true;
+      } else this.clearInput("cancelled");
+      return;
+    }
     if (hit.object.userData.manipulationSpeedSlider) {
       const thumb = hit.object.userData.sliderThumb as THREE.Object3D | undefined;
       if (thumb) this.interaction.capture(event.target, thumb, thumb.getWorldPosition(new THREE.Vector3()));
@@ -671,6 +770,20 @@ export class WebXRInputController {
     if ((this.gestures.panelGrip && this.gestures.panelHold === event.target) || (this.gestures.robotPanelGrip && this.gestures.manipulationHold === event.target)) this.clearInput();
   }
 
+  onSelect(event: xb.SelectEvent): void {
+    const gesture = this.gestures.navigationMapHold;
+    if (this.mapSecondHand) return;
+    if (!gesture || gesture.source !== event.target || !this.tracking || this.session?.visibilityState !== "visible" ||
+        !event.target.inputSource || !Array.from(this.session.inputSources).some(source => source === event.target.inputSource) ||
+        !this.client.isRobotSelected() || !this.client.ui.menuOpen) return;
+    const ray = this.mapRay(event.target, gesture.direct);
+    if (ray) {
+      this.map?.setMotionAvailable(this.client.navigationMapCanSend?.() === true);
+      this.map?.complete(ray, performance.now());
+      this.map?.abort();
+    }
+  }
+
   onSelectEnd(event: xb.SelectEvent): void {
     if (!this.touchDispatch) this.gestures.physicalPinch(event.target, false);
     this.gestures.observePress(this.navigationSourceId(event.target), false);
@@ -678,6 +791,20 @@ export class WebXRInputController {
       return;
     }
     if (!this.touchDispatch && this.gestures.ownsTouch(event.target)) { this.gestures.releaseTouch(event.target); return; }
+    if (this.mapSecondHand) {
+      const first = this.gestures.navigationMapHold;
+      if (first && (event.target === this.mapSecondHand.source || event.target === first.source)) {
+        const remaining = event.target === first.source ? this.mapSecondHand : first;
+        const ray = this.mapRay(remaining.source, remaining.direct);
+        if (!ray) { this.clearInput("tracking-lost"); return; }
+        this.interaction.releaseCapture(event.target);
+        this.interaction.direct.releaseCapture(event.target);
+        this.map?.endScale(ray);
+        this.mapSecondHand = null;
+        this.gestures.transferMap(remaining.source, remaining.target, remaining.direct);
+      }
+      return;
+    }
     if (this.gestures.owner && this.gestures.owner !== event.target) return;
     if (this.gestures.panelGrip || (this.gestures.panelHold && this.gestures.panelHold !== event.target) ||
         (this.gestures.worldHold && this.gestures.worldHold !== event.target)) return;
@@ -699,6 +826,7 @@ export class WebXRInputController {
     this.handStyle.dispose();
     this.navigationFloor.geometry.dispose();
     this.navigationFloor.material.dispose();
+    this.map?.dispose();
     this.mainMenu?.dispose();
     this.mainMenu?.panel.removeFromParent();
   }
@@ -731,6 +859,18 @@ export class WebXRInputController {
     } finally { this.touchDispatch = false; }
   }
 
+  private mapRay(controller: InputSource, direct: boolean) {
+    if (!direct) return controller.visible ? this.interaction.ray(controller) : null;
+    let point: THREE.Vector3 | undefined;
+    if (controller.inputSource?.hand) {
+      const hand = this.input.hands[controller.userData.id];
+      const index = hand?.joints["index-finger-tip"], thumb = hand?.joints["thumb-tip"];
+      if (!hand?.visible || !index?.visible || !thumb?.visible) return null;
+      point = index.getWorldPosition(new THREE.Vector3()).add(thumb.getWorldPosition(new THREE.Vector3())).multiplyScalar(0.5);
+    } else point = this.interaction.direct.point(controller);
+    return point ? this.map?.directRay(point) ?? null : null;
+  }
+
   private panelRay(controller: xb.SelectEvent["target"]): { origin: [number, number, number]; direction: [number, number, number] } {
     return this.interaction.direct.ray(controller) ?? this.interaction.ray(controller);
   }
@@ -740,11 +880,16 @@ export class WebXRInputController {
   }
 
   private clearInput(reason: InputEndReason = "cancelled"): void {
+    this.mapSecondHand = null;
+    const abortMap = this.gestures.navigationMapHold !== null ||
+      reason === "source-lost" || reason === "tracking-lost" || reason === "mode-change" ||
+      reason === "suspend" || reason === "stop" || reason === "dispose";
     this.gestures.finish(reason, {
       releaseMechanisms: () => {
         this.interaction?.direct.cancel();
         this.interaction?.releaseCaptures();
         this.mainMenu?.endManipulation();
+        if (abortMap) this.map?.abort(reason !== "release");
       },
       notifyDomain: complete => this.client.loseInput(complete),
     });
@@ -753,6 +898,7 @@ export class WebXRInputController {
   suspend(): void {
     this.gestures.cancelTouches("suspend");
     this.clearInput("suspend");
+    this.map?.suspend();
     this.client.robot.setHovered(false);
     this.client.navigation.marker.setHovered(false);
     this.sound.setActive(false);
@@ -763,6 +909,7 @@ export class WebXRInputController {
   reset(): void {
     this.suspend();
     this.panels.reset();
+    this.map?.resetTrackingReference();
   }
 
   private scrollPointerY(view: ScrollableTextView, from: [number, number, number], dir: [number, number, number]): number | null {
@@ -802,7 +949,12 @@ export class WebXRInputController {
     if (!axes || axes.length < 2 || this.gestures.uiGrab || this.gestures.panelHold || this.gestures.worldHold) return null;
     const pointer = this.input.controllers.find(controller => controller.inputSource === source);
     if (pointer && this.mainMenu?.scrollView(this.interaction.hit(pointer)?.object)) return null;
-    return { x: axes.length >= 4 ? axes[2] : axes[0], y: axes.length >= 4 ? axes[3] : axes[1] };
+    const x = axes.length >= 4 ? axes[2] : axes[0], y = axes.length >= 4 ? axes[3] : axes[1];
+    if (this.joystickNeedsNeutral) {
+      if (Math.hypot(x, y) < 0.15) this.joystickNeedsNeutral = false;
+      return null;
+    }
+    return { x, y };
   }
 
 

@@ -36,24 +36,34 @@ export class PalmMenuGate {
 export class MenuAnchorController {
   private anchor: XRInputSource | null = null;
   private readonly offset = new THREE.Vector3();
+  private readonly adjustment = new THREE.Vector3();
   get source(): XRInputSource | null { return this.anchor; }
 
-  attach(source: XRInputSource, position: THREE.Vector3, eye: THREE.Vector3, headRotation: THREE.Quaternion, panel: THREE.Object3D): void {
+  attach(source: XRInputSource, position: THREE.Vector3, eye: THREE.Vector3, sourceRotation: THREE.Quaternion, panel: THREE.Object3D): void {
     this.anchor = source;
-    const forward = new THREE.Vector3(0, 0, -1).applyQuaternion(headRotation);
-    forward.y = 0;
-    if (forward.lengthSq() < 1e-8) forward.set(0, 0, -1);
-    this.offset.copy(forward.normalize()).multiplyScalar(0.18).add(new THREE.Vector3(0, source.hand ? 0.20 : 0.12, 0));
-    // Follow the new source from the existing pose instead of snapping on attach.
-    this.update(position, eye, panel, 1 / 60);
+    this.adjustment.set(0, 0, 0);
+    this.offset.set(source.handedness === "right" ? -0.24 : 0.24, 0.04, -0.18);
+    this.update(position, eye, panel, 1 / 60, sourceRotation);
   }
 
-  update(position: THREE.Vector3, eye: THREE.Vector3, panel: THREE.Object3D, deltaS: number): void {
+  update(position: THREE.Vector3, eye: THREE.Vector3, panel: THREE.Object3D, deltaS: number, sourceRotation?: THREE.Quaternion): void {
     if (!this.anchor) return;
     const alpha = 1 - Math.exp(-20 * Math.max(0, deltaS));
-    panel.position.lerp(position.clone().add(this.offset), alpha);
+    const offset = this.offset.clone();
+    if (this.anchor.hand) {
+      const direction = position.clone().sub(eye);
+      if (direction.x * direction.x + direction.z * direction.z > 1e-6) {
+        offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), Math.atan2(-direction.x, -direction.z));
+      }
+    } else if (sourceRotation) {
+      const yaw = new THREE.Euler().setFromQuaternion(sourceRotation, "YXZ").y;
+      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+    }
+    panel.position.lerp(position.clone().add(offset).add(this.adjustment), alpha);
     this.faceViewer(eye, panel, alpha);
   }
+
+  shift(offset: THREE.Vector3): void { if (this.anchor) this.adjustment.add(offset); }
 
   detach(): void { this.anchor = null; }
 

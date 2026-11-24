@@ -5,6 +5,7 @@ import "./fixtures/xrEnvironment";
 
 import * as xb from "xrblocks";
 import { SurfaceButton } from "../src/presentation/SurfaceButton";
+import { ScrollableTextView } from "../src/presentation/TextViews";
 import { DIMOS_AR_DESIGN } from "../src/presentation/DimOSARDesign";
 import { MainMenuView } from "../src/presentation/MainMenuView";
 
@@ -39,6 +40,52 @@ it("constructs real XR Blocks buttons and activates the supported trigger hook",
   view.panel.visible = false;
   next.onTriggered(0);
   expect(handlers.onSetup).toHaveBeenCalledOnce();
+});
+
+it("raycasts the whole resized panel background, including the lower half", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  view.panel.position.set(0, 0, -1);
+  const background = view.panel.getObjectByName("Menu background") as THREE.Mesh;
+  const appearance = background.parent!;
+  const raycaster = new THREE.Raycaster();
+  raycaster.layers.set(1);
+  for (const height of [0.22, 0.5, 0.8]) {
+    (view as any).heightController.height = height;
+    (view as any).applyHeight();
+    view.panel.updateWorldMatrix(true, true);
+    const bottom = 0.5 - height / DIMOS_AR_DESIGN.panel.height;
+    for (const y of [0.45, bottom + 0.03 / DIMOS_AR_DESIGN.panel.height]) {
+      const point = appearance.localToWorld(new THREE.Vector3(0, y, background.position.z));
+      raycaster.set(point.clone().add(new THREE.Vector3(0, 0, 1)), new THREE.Vector3(0, 0, -1));
+      expect(raycaster.intersectObject(background).length).toBeGreaterThan(0);
+      expect(view.canInteract(background, point)).toBe(true);
+    }
+  }
+  view.dispose();
+});
+
+it("does not put a non-scrollable text hit plane over the panel background", () => {
+  const view = new ScrollableTextView({ text: "", width: 0.5, height: 0.2 }, true);
+  view.updateLayouts();
+  expect(view.maxScroll).toBe(0);
+  expect(view.bodyHit.visible).toBe(false);
+  view.dispose();
+});
+
+it("allows selecting the panel background across its full height", () => {
+  const noop = () => {};
+  const view = new MainMenuView({ onSetup: noop, onBack: noop, onRetry: noop, onRestart: noop, onMenu: noop, onMode: noop, onRobot: noop, onDebug: noop, onLocalize: noop, onRealign: noop, onEstop: noop, onDraft: noop, onAgentText: () => true });
+  view.panel.position.set(0, 0, -1);
+  view.panel.updateWorldMatrix(true, true);
+  const background = view.panel.getObjectByName("Menu background")!;
+  for (const y of [-0.35, 0, 0.35]) {
+    const point = view.panel.localToWorld(new THREE.Vector3(0, y, 0));
+    expect(view.canInteract(background, point)).toBe(true);
+    expect(view.beginManipulation([point.x, point.y, 0], [0, 0, -1])).toBe(true);
+    view.endManipulation();
+  }
+  view.dispose();
 });
 
 it("grips the panel body, rotates around the grab point with smoothing, and retains the released pose", () => {
@@ -252,6 +299,11 @@ it("shows separate response and draft fields, moves robot controls into settings
   const settings = buttons.find(button => button.name === "Global settings")!;
   settings.onTriggered(0); view.apply({ ...snap, operatingMode: "agent", robotSelected: true }); view.updateHover([], 0.28);
   const diagnostics = buttons.find(button => button.text === "Diagnostics")!;
+  const restartSetup = buttons.find(button => button.text === "Restart setup");
+  expect(restartSetup).toBeDefined();
+  const debugControl = buttons.find(button => button.text === "Debug · Off")!;
+  expect(diagnostics.position.y).toBe(debugControl.position.y);
+  expect(diagnostics.position.x).toBeGreaterThan(debugControl.position.x);
   diagnostics.onTriggered(0); expect(onDebug).not.toHaveBeenCalled();
   view.apply(snap);
   const debug = buttons.find(button => button.text === "Debug · Off")!;
@@ -421,6 +473,36 @@ it("billboards a bottom-bar drag in yaw and pitch without roll or moving the gra
   view.dispose();
 });
 
+it("keeps an attached menu following during a map drag and leaves a detached menu in place", () => {
+  const source = { handedness: "left", gripSpace: {} } as XRInputSource;
+  const menu = { panel: new THREE.Group() } as unknown as MainMenuView;
+  const ui = { menuOpen: true, setupCompleted: true, snapshot: () => ({
+    setupCompleted: true, setupCelebrating: false, menuOpen: true,
+  }) };
+  const gestures = new WebXRInputSession(() => {});
+  const dragging = new THREE.Group() as any;
+  gestures.authorize(dragging, {});
+  gestures.begin({ kind: "navigationMap", source: dragging, target: new THREE.Object3D(), direct: false });
+  const presenter = new PanelInputPresenter(ui as never, () => menu,
+    () => gestures.panelHold !== null, () => gestures.owner !== null);
+  const eye = { x: 0, y: 1.6, z: 0, w: 1 } as DOMPointReadOnly;
+  const head = { x: 0, y: 0, z: 0, w: 1 } as DOMPointReadOnly;
+  let x = 0;
+  const frame = { getPose: () => ({ transform: { position: { x, y: 1, z: -0.5 }, orientation: head } }) } as unknown as XRFrame;
+  const session = { inputSources: [source] } as unknown as XRSession;
+  presenter.menuAnchor.attach(source, new THREE.Vector3(0, 1, -0.5), new THREE.Vector3(0, 1.6, 0), new THREE.Quaternion(), menu.panel);
+  presenter.update(session, frame, {} as XRReferenceSpace, eye, head, 1);
+  const before = menu.panel.position.x;
+  x = 0.2;
+  presenter.update(session, frame, {} as XRReferenceSpace, eye, head, 1);
+  expect(menu.panel.position.x - before).toBeCloseTo(0.2);
+  presenter.detachAnchor();
+  const detached = menu.panel.position.clone();
+  x = 0.4;
+  presenter.update(session, frame, {} as XRReferenceSpace, eye, head, 1);
+  expect(menu.panel.position).toEqual(detached);
+});
+
 it("starts a panel grab from the accepted input ray while the visual laser is still catching up", () => {
   const app = Object.create(WebXRInputController.prototype) as any;
   const target = new THREE.Object3D() as any; target.inputSource = { handedness: "right" }; target.userData.id = 1;
@@ -428,7 +510,7 @@ it("starts a panel grab from the accepted input ray while the visual laser is st
   const begin = vi.fn(() => true), pin = vi.fn(), detach = vi.fn();
   Object.assign(app, { trackingState: { tracking: () => true, session: () => ({ visibilityState: "visible" }) }, navigationSourceIds: new WeakMap(), nextNavigationSource: 0,
     gestures: new WebXRInputSession(() => {}), panels: { setupPlacement: { pin }, detachAnchor: detach },
-    interaction: { capture: vi.fn(), hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
+    interaction: { capture: vi.fn(), hit: () => ({ object: bar, point: new THREE.Vector3(0, 0, -1) }), direct: { capture() {}, isDirect: () => false, ray: () => null }, ray: () => raw, smoothedRay: () => ({ origin: [0, 0, 0], direction: [1, 0, 0] }) },
     client: { manipulation: { owns: () => false }, navigation: { clearAim() {}, marker: { object: new THREE.Group() } }, joystick: { loseInput() {} } },
     mainMenu: { isEmergencyTarget: () => false, ownsTarget: () => true, canInteract: () => true, scrollView: () => null, isSpeechTarget: () => false, isControl: () => false, beginManipulation: begin } });
   app.onSelectStart({ target });

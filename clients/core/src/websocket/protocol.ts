@@ -3,6 +3,7 @@
 // non-busy admission. These semantics require no extra wire fields (PROTOCOL.md).
 // interaction_request.takeover reuses acquire fields and awaits a stopped native
 // agent before granting a manual navigation lease; cancel_acquire retires it.
+// Navigation-map bulk frame metadata is validated by the bulk codec.
 import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
 import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
 import { type InteractionState, type InteractionResult, type InteractionAuthority, type InteractionTarget, type InteractionCredentials, CAPABILITY_NAMES, type Capabilities, type Capability, type CapturePolicy, type DistortionModel, type Intrinsics, type Lidar, type LidarSettings, type LocalizationObservation, type LocalizationObservations, type LocalizationObservationsRequest, type LocalizationResult, type SharedFrameContext, type LocalizationStatus, type NavGoal, type NavState, type Outbound, type Pose, type Quat, type RobotDescription, type State, type TimeSync, type Vec3, type YawPose, type Hello, type HelloRequest, type AgentMessage, type AgentSkill, type NavigationCapability } from "../ClientContracts";
@@ -21,6 +22,17 @@ const CAPTURE_POLICIES: readonly CapturePolicy[] = [
   "robot_los_preferred",
   "any_angle",
 ];
+
+export function encodeNavigationMapRequest(
+  subscriptionId: string,
+  sequence: number,
+  viewport: { center?: readonly [number, number]; radiusM: number } | null,
+): string {
+  return encodeText({
+    type: "navigation_map_request", subscription_id: subscriptionId, sequence, enabled: viewport !== null,
+    ...(viewport && { center: viewport.center, radius_m: viewport.radiusM }),
+  });
+}
 
 export function encodeText(value: unknown): string {
   return JSON.stringify(value) + "\n";
@@ -44,6 +56,7 @@ import { decodePresenceState } from "../replication/PresenceController";
 export function encodeHelloRequest(request: Omit<HelloRequest, "type" | "protocol_version">): string {
   return encodeText({
     type: "hello_request",
+    ...(request.client_name ? { client_name: request.client_name } : {}),
     ...(request.resume_token ? { resume_token: request.resume_token } : {}),
     ...(request.presence === undefined ? {} : { presence: request.presence }),
     protocol_version: 2,
@@ -209,6 +222,8 @@ export function decodeOutboundObject(data: Record<string, unknown>): Exclude<Out
   try {
   switch (msgType) {
     case "manipulation_state":
+      if (data.source_generation !== undefined) decodeSourceGeneration(data);
+      return decodeManipulation(data);
     case "manipulation_result": return decodeManipulation(data);
     case "presence_state": return decodePresenceState(data);
     case "interaction_state": return decodeInteractionState(data);
@@ -484,10 +499,12 @@ function decodeSource(data: Record<string, unknown>): NonNullable<Hello["source"
   return { kind: "recording", read_only: requireBoolean(data, "read_only"), name: requireString(data, "name") };
 }
 function decodePlayback(data: Record<string, unknown>): NonNullable<State["playback"]> {
-  if (data.state !== "playing" && data.state !== "ended") throw new Error("Invalid playback state");
+  if (data.state !== "playing" && data.state !== "paused" && data.state !== "stopped" &&
+      data.state !== "seeking" && data.state !== "ended" && data.state !== "error") throw new Error("Invalid playback state");
   const elapsed_s = finiteField(data, "elapsed_s"), duration_s = finiteField(data, "duration_s");
   if (elapsed_s < 0 || duration_s < elapsed_s) throw new Error("Invalid playback progress");
-  return { state: data.state, elapsed_s, duration_s };
+  return { state: data.state, elapsed_s, duration_s,
+    ...(data.source_generation === undefined ? {} : { source_generation: decodeSourceGeneration(data) }) };
 }
 
 function decodeHello(data: Record<string, unknown>): Hello {
@@ -574,6 +591,7 @@ function decodeNavigationCapability(raw: unknown): NavigationCapability {
     ...base,
     nav_goal: { ...decodeCapability(data.nav_goal, "navigation.nav_goal"), preview: requireBoolean(asObject(data.nav_goal, "navigation.nav_goal"), "preview") },
     nav_joystick: decodeCapability(data.nav_joystick, "navigation.nav_joystick"),
+    nav_map: decodeCapability(data.nav_map, "navigation.nav_map"),
   };
 }
 

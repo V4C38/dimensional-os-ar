@@ -13,8 +13,8 @@ def test_launcher_publishes_connection_changes_only(
     monkeypatch.setenv("DIMOS_AR_LAUNCHER_CONNECTIONS", "1")
     publisher = LauncherConnections()
     publisher.publish("Go2", "waiting", ())
-    publisher.publish("Go2", "online", ("client",))
-    publisher.publish("Go2", "online", ("client",))
+    publisher.publish("Go2", "online", (("client", "Quest 3"),))
+    publisher.publish("Go2", "online", (("client", "Quest 3"),))
     publisher.publish("Go2", "online", ())
     rows = [
         json.loads(line.removeprefix("DIMOS_AR_CONNECTIONS "))
@@ -24,7 +24,7 @@ def test_launcher_publishes_connection_changes_only(
         [{"kind": "robot", "name": "Go2", "status": "waiting"}],
         [
             {"kind": "robot", "name": "Go2", "status": "online"},
-            {"kind": "client", "id": "client", "status": "online"},
+            {"kind": "client", "id": "client", "name": "Quest 3", "status": "online"},
         ],
         [{"kind": "robot", "name": "Go2", "status": "online"}],
     ]
@@ -36,3 +36,14 @@ def test_cli_run_does_not_publish_launcher_records(
     monkeypatch.delenv("DIMOS_AR_LAUNCHER_CONNECTIONS", raising=False)
     LauncherConnections().publish("Go2", "online", ())
     assert capsys.readouterr().out == ""
+
+
+def test_hello_device_name_is_validated() -> None:
+    from dimos.ar.websocket.protocol import decode_hello_request
+
+    body = {"type": "hello_request", "protocol_version": 2, "ts_client": 1,
+            "client_name": "Quest 3S"}
+    assert decode_hello_request(json.dumps(body)).client_name == "Quest 3S"
+    body["client_name"] = "bad\nname"
+    with pytest.raises(ValueError, match="client name"):
+        decode_hello_request(json.dumps(body))

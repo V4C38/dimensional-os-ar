@@ -18,7 +18,7 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       root.session.stop();
       const yes = { available: true, reason: null }, no = { available: false, reason: "Stationary arm" };
       scenario.caps = { ...scenario.caps, manipulation: yes, agent: no, lidar: no,
-        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no } };
+        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no, nav_map: { available: false, reason: "Map unavailable" } } };
       scenario.ready(scenario.caps); scenario.runtime(); scenario.worldOnly();
       scenario.worldCamera = false; // Arm framing is owned by the golden helper until completion.
       scenario.armGolden = new IntegrationArmGolden(root, scenario.peer, scenario.input!,

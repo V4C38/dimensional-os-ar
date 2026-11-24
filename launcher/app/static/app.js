@@ -1,4 +1,5 @@
-import { LauncherSession } from "./launcher-session.mjs";
+import { LauncherSession } from "./launcher-session.mjs?v=replay";
+import { replayTimeline } from "./replay-timeline.mjs";
 import { sourceRequest, replayPreferenceKey, LaunchConfiguration, HardwareDiscovery } from "./source-selection.mjs?v=launcher-controls-12";
 import { logConsole } from "./log-console.mjs";
 import { markerMountEditor } from "./marker-mount-editor.mjs";
@@ -73,8 +74,16 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
   const configuration = new LaunchConfiguration({ blueprint: blueprintSelect.value });
   const hardware = new HardwareDiscovery(fetch);
   const preferences = new LauncherPreferences();
+  const timeline = replayTimeline({
+    root: $("replayTimeline"),
+    slider: $("replayPosition"),
+    time: $("replayTime"),
+    status: $("replayTimelineStatus"),
+    buttons: { play: $("replayPlay"), pause: $("replayPause"), stop: $("replayStop") },
+  });
   const service = new LauncherSession({
     publishStatus: applyStatus,
+    publishPlayback: playback => timeline.observe(playback),
     publishConnections: applyConnectionStatus,
     publishLog: line => appendLog(line),
     refreshHardware: () => {
@@ -577,7 +586,9 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     installBtn.disabled = installDisabled || ["checking", "invalid"].includes(selectedCheck?.state) ||
       !(cloning ? cloneDir.value.trim() : dimosPython.value.trim());
     const needsAttention = needsInstall && !installDisabled && service.status.check_ok != null;
-    if (needsAttention && !installBanner.classList.contains("needs-setup")) installBanner.open = true;
+    if (needsAttention && service.status.check_ok === false && !installBanner.classList.contains("needs-setup")) {
+      installBanner.open = true;
+    }
     installBanner.classList.toggle("needs-setup", needsAttention);
 
     const versionBits = [];
@@ -656,6 +667,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
   }
 
   function applyStatus(status) {
+    timeline.observe(status.playback);
 
     if (!installPathEdited && document.activeElement !== dimosPython && (status.dimos_install_dir || status.dimos_python)) {
       dimosPython.value = status.dimos_install_dir || status.dimos_python;
@@ -1174,7 +1186,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     const selected = preferences.values[replayPreferenceKey(robot)] || "";
     const paths = new Set([...(preferences.recordings[robot] || []), selected].filter(Boolean));
     const select = $("playbackSource");
-    select.replaceChildren(new Option("Default recording", ""), ...Array.from(paths, path => {
+    select.replaceChildren(new Option(robot === "go2" ? "Go2 example" : "Default recording", ""), ...Array.from(paths, path => {
       const option = new Option(path.split(/[\\/]/).at(-1) || path, path);
       option.title = path;
       return option;
@@ -1253,12 +1265,13 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
       const response = await fetch("/api/launcher-preferences");
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || "Could not load saved preferences");
-      if (presentation().locked || !preferences.hydrate(data)) return;
+      if (!preferences.hydrate(data)) return;
       if (typeof data.manual_ip === "string") robotIp.value = data.manual_ip;
       const value = preferences.values[`${configuration.replayRobot}_source`] || "auto";
       renderSourceOptions(value);
       syncSource();
-      if (value.startsWith("device:")) void refreshRobotDiscovery();
+      renderControls();
+      if (value.startsWith("device:") && !presentation().locked) void refreshRobotDiscovery();
     } catch (error) {
       if (!preferences.edited) appendLog(`Could not load launcher preferences: ${error}`);
     }

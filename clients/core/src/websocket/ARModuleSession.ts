@@ -1,11 +1,12 @@
+import { navigationMapContains } from "../navigation/NavigationMapProjection";
 import { PresenceController } from "../replication/PresenceController";
 import { DeferredAssetReplies } from "./DeferredAssetReplies";
-import { BulkTransfer, utf8Bytes } from "./BulkTransfer";
+import { BulkTransfer, type NavigationMapHeader, utf8Bytes } from "./BulkTransfer";
 import type { ManipulationState } from "../manipulation/ManipulationTypes";
 import { CollaborationController } from "../replication/CollaborationController";
-import { type InteractionState, AR_MODULE_CLIENT_CONFIG, type ClientClock, type WebSocketTransport, type ReadonlyFacts, type Capabilities, type CapabilityName, type Hello, type Lidar, type LocalizationObservation, type LocalizationResult, type NavGoal, type NavState, type NavigationInputName, type Outbound, type Pose, type State } from "../ClientContracts";
+import { type InteractionState, AR_MODULE_CLIENT_CONFIG, type ClientClock, type WebSocketTransport, type ReadonlyFacts, type Capabilities, type CapabilityName, type Hello, type Lidar, type LocalizationObservation, type LocalizationResult, type NavGoal, type NavState, type NavigationMapSnapshot, type NavigationInputName, type Outbound, type Pose, type State } from "../ClientContracts";
 import type { ClientTrackingOrigin, ClientTrackingOriginStore } from "../localization/ClientTracking";
-import { encodeNavigationCancelRequest,
+import { encodeNavigationCancelRequest, encodeNavigationMapRequest,
   TextFramer,
   ProtocolDecodeError,
   encodeClientError,
@@ -106,6 +107,7 @@ export interface ARModuleSessionState {
   readonly hello: ReadonlyFacts<Hello> | null;
   readonly state: ReadonlyFacts<State> | null;
   readonly pose: ReadonlyFacts<Pose> | null;
+  readonly navigationMap: NavigationMapSnapshot | null;
   readonly nav_goal: ReadonlyFacts<NavGoal> | null;
   readonly nav_preview?: ReadonlyFacts<NavGoal> | null;
   readonly manipulation?: ReadonlyFacts<ManipulationState> | null;
@@ -121,6 +123,7 @@ export interface ARModuleSessionState {
 }
 
 export interface ARModuleSessionDependencies {
+  clientName?: () => string;
   transport: WebSocketTransport;
   clock: ClientClock;
   clientTrackingOriginStore: ClientTrackingOriginStore;
@@ -148,7 +151,7 @@ class ControlChannelScheduler {
 
   receive(line: string): void {
     const type = /"type"\s*:\s*"([^"]+)"/.exec(line)?.[1];
-    const linkSnapshot = type === "state" && /"robot_link"\s*:/.test(line);
+    const linkSnapshot = type === "state" && /"(?:robot_link|playback)"\s*:/.test(line);
     if (this.ready() && type && !linkSnapshot && ["state", "pose", "manipulation_state", "interaction_state", "presence_state"].includes(type)) {
       if (this.inbound.has(type)) this.coalesced++;
       this.inbound.set(type, line);
@@ -240,6 +243,9 @@ export class ARModuleSession {
   private state: State | null = null;
   private pose: Pose | null = null;
   private lidar: Lidar | null = null;
+  private navigationMap: NavigationMapSnapshot | null = null;
+  private mapSubscriptionSerial = 0;
+  private mapViewport: { id: string; sequence: number; center?: readonly [number, number]; radiusM: number; dirty: boolean; nextAt: number } | null = null;
   private manipulation: ManipulationState | null = null;
   private agentMessage: string | null = null;
   private agentMessageRevision = 0;
@@ -259,6 +265,7 @@ export class ARModuleSession {
   private captureId: string | null = null;
   private readonly bulk: BulkTransfer;
   private readonly assetReplies: DeferredAssetReplies;
+  private readonly clientName?: () => string;
   private reportWindow = { at: 0, count: 0 };
   private speechSerial = 0;
   private pendingSpeech: { id: string; data: Uint8Array; mime: string; started: boolean; deadline: number;
@@ -266,11 +273,15 @@ export class ARModuleSession {
     resolve: (text: string) => void; reject: (error: Error) => void } | null = null;
 
   constructor(deps: ARModuleSessionDependencies) {
+    this.clientName = deps.clientName;
     this.presence = new PresenceController({ ready: () => this.phase === "ready" && this.hello?.presence === true,
       clientId: () => this.hello?.client_id ?? null, now: () => deps.clock.now(), send: text => this.sendText(text) }, deps.clientTrackingOriginStore);
     this.collaboration = new CollaborationController({ ready: () => this.phase === "ready",
       clientId: () => this.hello?.client_id ?? null, now: () => deps.clock.now(), send: text => this.sendText(text) });
-    this.bulk = new BulkTransfer(deps.clock, () => this.bulkChanged(), data => this.applyLidar(data), reason => this.fail(reason));
+    this.bulk = new BulkTransfer(deps.clock, () => this.bulkChanged(), (data, sourceGeneration) => this.applyLidar(data, sourceGeneration), reason => this.fail(reason),
+      snapshot => { this.navigationMap = snapshot; this.emitView(); },
+      header => this.acceptsNavigationMap(header),
+      error => this.reportDecodeError(error, "Navigation map snapshot", "navigation_map"));
     this.assetReplies = new DeferredAssetReplies(deps.clock, this.bulk,
       message => this.applyReadyMessage(message, true), (key, value) => this.retireAssetReply(key, value),
       error => this.reportDecodeError(error, "Bulk asset completion"));
@@ -323,6 +334,7 @@ export class ARModuleSession {
     const frameStart = this.clock.now();
     this.control.pump(frameStart, .002);
     this.bulk.tick();
+    this.sendMapViewport();
     this.control.flushStreams();
     this.assetReplies.tick(frameStart);
     this.collaboration.tick();
@@ -358,7 +370,7 @@ export class ARModuleSession {
     this.phase = "awaiting_hello";
     this.pendingHelloTs = tsClient;
     this.helloDeadline = tsClient + this.helloTimeoutS;
-    this.transport.sendText(encodeHelloRequest({ ts_client: tsClient, presence: true, resume_token: this.resumeToken }));
+    this.transport.sendText(encodeHelloRequest({ ts_client: tsClient, presence: true, resume_token: this.resumeToken, client_name: this.clientName?.() }));
     this.emitView();
   }
 
@@ -400,7 +412,9 @@ export class ARModuleSession {
     this.fail("Binary payload on v2 control channel");
   }
 
-  private applyLidar(data: Uint8Array): void {
+  private applyLidar(data: Uint8Array, sourceGeneration?: number): void {
+    const playback = this.state?.playback;
+    if (playback && (playback.state === "seeking" || playback.source_generation !== sourceGeneration)) return;
     try {
       this.lidar = decodeLidar(data);
     } catch (error) {
@@ -483,6 +497,62 @@ export class ARModuleSession {
     speech.reject(new Error(reason));
   }
 
+  setNavigationMapViewport(viewport: { center?: readonly [number, number]; radiusM: number } | null): void {
+    const current = this.mapViewport;
+    if (!viewport) {
+      if (!current) return;
+      if (this.phase === "ready" && this.bulk.diagnostics().ready) {
+        this.sendText(encodeNavigationMapRequest(current.id, current.sequence + 1, null));
+      }
+      this.cancelPendingNavigationMapGoal();
+      this.mapViewport = null;
+      this.navigationMap = null;
+      this.emitView();
+      return;
+    }
+    const { center, radiusM } = viewport;
+    if (!Number.isFinite(radiusM) || radiusM < 0.5 || radiusM > 20) throw new Error("Invalid navigation map radius");
+    if (center && !center.every(Number.isFinite)) throw new Error("Invalid navigation map center");
+    if (current && current.radiusM === radiusM && current.center?.[0] === center?.[0] && current.center?.[1] === center?.[1]) return;
+    this.mapViewport = current ?
+      { ...current, center: center && [...center], radiusM, sequence: current.sequence + 1, dirty: true } :
+      { id: `navigation-map-${++this.mapSubscriptionSerial}`, sequence: 0,
+        center: center && [...center], radiusM, dirty: true, nextAt: 0 };
+    this.sendMapViewport();
+  }
+  private sendMapViewport(): void {
+    const viewport = this.mapViewport;
+    const now = this.clock.now();
+    if (!viewport?.dirty || now < viewport.nextAt || this.phase !== "ready" ||
+        !this.hello?.capabilities.navigation.nav_map.available || !this.bulk.diagnostics().ready) return;
+    this.sendText(encodeNavigationMapRequest(viewport.id, viewport.sequence, viewport));
+    viewport.dirty = false;
+    viewport.nextAt = now + 0.1;
+  }
+  private acceptsNavigationMap(header: Pick<NavigationMapHeader, "subscription_id" | "sequence" |
+    "snapshot_sequence" | "odom_reference_id" | "source_generation">): boolean {
+    const generation = this.state?.playback?.source_generation ?? this.state?.robot_link?.source_generation ?? 0;
+    return this.phase === "ready" && this.hello?.capabilities.navigation.nav_map.available === true &&
+      this.mapViewport?.id === header.subscription_id && header.sequence <= this.mapViewport.sequence &&
+      this.hello.odom_reference_id === header.odom_reference_id && generation === header.source_generation &&
+      this.state?.robot_link?.status !== "offline" && this.state?.playback?.state !== "seeking" &&
+      (this.navigationMap === null || header.sequence >= this.navigationMap.sequence &&
+       header.snapshot_sequence > this.navigationMap.snapshot_sequence);
+  }
+  submitNavigationMapGoal(position: readonly [number, number]): Promise<void> {
+    const map = this.navigationMap;
+    if (this.phase !== "ready" || !map || !this.hello?.capabilities.navigation.nav_goal.available ||
+        this.hello.source?.read_only || this.state?.robot_link?.motion_ready === false ||
+        this.state?.safety?.stopped || !position.every(Number.isFinite) ||
+        !navigationMapContains(map, position)) {
+      return Promise.reject(new Error("Navigation map goal unavailable"));
+    }
+    return this.collaboration.submitNavigationMapGoal({
+      position: [...position], odom_reference_id: map.odom_reference_id, source_generation: map.source_generation,
+    });
+  }
+  cancelPendingNavigationMapGoal(): void { this.collaboration.cancelPendingNavigationMapGoal(); }
+
   private navigationCancellationSerial = 0;
   private pendingNavigationCancellation: { deadline: number; reject: (error: Error) => void } | null = null;
 
@@ -546,6 +616,7 @@ export class ARModuleSession {
       hello: this.hello,
       state: this.state,
       pose: this.pose,
+      navigationMap: this.navigationMap,
       nav_goal: this.collaboration.navigation().active_goal,
       nav_preview: this.collaboration.navigation().preview,
       manipulation: this.manipulation,
@@ -690,6 +761,8 @@ export class ARModuleSession {
     switch (message.type) {
       case "presence_state": this.presence.apply(message); return;
       case "manipulation_state":
+        if (this.state?.playback?.source_generation !== undefined &&
+            message.source_generation !== this.state.playback.source_generation) return;
         this.manipulationError = null;
         this.manipulation = !message.available && this.manipulation ? { ...this.manipulation, ...message } : message;
         break;
@@ -701,6 +774,14 @@ export class ARModuleSession {
         this.collaboration.accept(message);
         break;
       case "state":
+        if (message.playback?.source_generation !== this.state?.playback?.source_generation) {
+          this.pose = this.lidar = this.manipulation = this.navigationMap = null;
+        }
+        if (message.robot_link?.source_generation !== this.state?.robot_link?.source_generation ||
+            message.robot_link?.status === "offline" || message.playback?.state === "seeking") {
+          this.navigationMap = null;
+          this.cancelPendingNavigationMapGoal();
+        }
         this.state = message;
         if (message.robot_link) {
           const { status, motion_ready } = message.robot_link;
@@ -711,6 +792,8 @@ export class ARModuleSession {
       case "pose": {
         const link = this.state?.robot_link;
         if (link && (link.status !== "online" || message.source_generation !== link.source_generation)) return;
+        const replayGeneration = this.state?.playback?.source_generation;
+        if (replayGeneration !== undefined && message.source_generation !== replayGeneration) return;
         this.pose = message;
         if (this.clientTrackingOriginStore.hasTrackingOrigin) this.clientTrackingOriginStore.retireBaseSighting(message.ts);
         this.robotTelemetry = "available";
@@ -864,6 +947,10 @@ export class ARModuleSession {
     this.captureId = null;
     this.assetReplies.reset();
     this.bulk.reset();
+    this.navigationMap = null;
+    if (this.mapViewport) this.mapViewport = { ...this.mapViewport,
+      id: `navigation-map-${++this.mapSubscriptionSerial}`, sequence: 0, dirty: true, nextAt: 0 };
+    this.collaboration.cancelPendingNavigationMapGoal(true, "Navigation map connection retired", false);
     if (!preserveInteraction) this.collaboration.reset();
     if (!preserveInteraction) this.manipulation = null;
     this.captureEpisodeId = null;

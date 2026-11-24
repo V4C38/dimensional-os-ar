@@ -204,6 +204,22 @@ export function closestPoint(mesh: THREE.Mesh, point: THREE.Vector3): THREE.Vect
     const offset = new THREE.Vector2(local.x, local.y).sub(center);
     if (offset.length() > r) offset.setLength(r);
     local.set(center.x + offset.x, center.y + offset.y, 0);
+  } else if (mesh.geometry.type === "CircleGeometry" || mesh.geometry.type === "RingGeometry") {
+    const radius = Math.hypot(local.x, local.y);
+    if (mesh.geometry instanceof THREE.RingGeometry) {
+      const { innerRadius, outerRadius, thetaStart, thetaLength } = mesh.geometry.parameters;
+      const start = THREE.MathUtils.euclideanModulo(thetaStart, Math.PI * 2);
+      const relative = THREE.MathUtils.euclideanModulo(Math.atan2(local.y, local.x) - start, Math.PI * 2);
+      const angle = relative <= thetaLength ? start + relative
+        : start + (relative - thetaLength <= Math.PI * 2 - relative ? thetaLength : 0);
+      const projection = local.x * Math.cos(angle) + local.y * Math.sin(angle);
+      const nearest = THREE.MathUtils.clamp(projection, innerRadius, outerRadius);
+      local.set(Math.cos(angle) * nearest, Math.sin(angle) * nearest, 0);
+    } else {
+      const outer = (mesh.geometry as THREE.CircleGeometry).parameters.radius;
+      if (radius > outer) local.multiplyScalar(outer / radius);
+      local.z = 0;
+    }
   } else if (mesh.geometry.type === "SphereGeometry") {
     local.clampLength(0, (mesh.geometry as THREE.SphereGeometry).parameters.radius);
   } else if (mesh.geometry.type === "CylinderGeometry") {
@@ -283,6 +299,7 @@ export class WebXRDirectInteraction {
   point(controller: Controller): THREE.Vector3 | undefined { return this.points.get(controller); }
   isDirect(controller: Controller): boolean { return this.captures.get(controller)?.direct ?? this.hovered.has(controller); }
   hasLostCapture(): boolean { return [...this.captures].some(([source, capture]) => capture.direct && !this.points.has(source)); }
+  releaseCapture(controller: Controller): void { this.captures.delete(controller); }
 
   resolve(controller: Controller, scene: THREE.Object3D | undefined, eligible: (object: THREE.Object3D, point: THREE.Vector3) => boolean): THREE.Intersection | undefined {
     const capture = this.captures.get(controller);
@@ -298,6 +315,7 @@ export class WebXRDirectInteraction {
           (capture?.target && capture.target !== object)) return;
       object.updateWorldMatrix(true, false);
       const contact = object.userData.touchButton ? this.indexPoints.get(controller) ?? point : point;
+      if (object.userData.topFaceOnly === true && object.worldToLocal(contact.clone()).z < 0) return;
       const closest = closestPoint(object, contact);
       const distance = closest.distanceTo(contact);
       if (distance > (object === previous ? 0.04 : 0.025) || !eligible(object, closest)) return;
@@ -426,6 +444,7 @@ export class InteractionCapture<T extends { userData: { id?: number } }> {
     return true;
   }
   release(source: T): void { if (this.current === source) this.current = null; }
+  transfer(source: T): void { this.current = source; }
   cancel(): void { this.current = null; this.presses.clear(); }
 }
 
@@ -523,6 +542,7 @@ export class XRBlocksRayInteraction {
     this.dragDirections.delete(controller);
   }
 
+  releaseCapture(controller: Controller): void { this.anchors.delete(controller); this.dragDirections.delete(controller); }
   releaseCaptures(): void { this.anchors.clear(); this.dragDirections.clear(); }
 
   presencePointers(): PresencePointer[] {
@@ -652,7 +672,7 @@ export class XRBlocksRayInteraction {
     });
     for (const controller of this.input.controllers) {
       if (!controller.inputSource) continue;
-      const active = !this.direct.isDirect(controller) && this.enabled && controller.inputSource.targetRayMode === "tracked-pointer" &&
+      const active = (this.anchors.has(controller) || !this.direct.isDirect(controller)) && this.enabled && controller.inputSource.targetRayMode === "tracked-pointer" &&
         controller.userData.connected === true && controller.visible;
       let beam = this.beams.get(controller);
       if (!active) {
@@ -683,11 +703,11 @@ export class XRBlocksRayInteraction {
             (target.userData.rayPriority === nearby.object.userData.rayPriority && candidate.miss < nearby.miss)) nearby = candidate;
         }
       }
-      const captured = this.policy.captured(controller);
+      const anchor = this.capturedPoint(controller);
+      const captured = this.policy.captured(controller) || anchor !== null;
       const shown = actionable || nearby !== null || captured;
       beam.affordance = actionable ? hit!.object : nearby?.object ?? null;
       const distance = actionable ? hit!.distance : nearby?.distance ?? EMPTY_RAY_LENGTH_M;
-      const anchor = this.capturedPoint(controller);
       const target = anchor ?? (actionable ? hit!.point.clone() : origin.clone().addScaledVector(direction, distance));
       const opacity = actionable || captured ? 1 : IDLE_LASER_OPACITY;
       if (beam.fresh || anchor) {

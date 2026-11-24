@@ -104,7 +104,7 @@ const hello: Hello = {
     object_detection: { available: false, reason: "No detector" },
     lidar: { available: true, reason: null }, localization: { available: true, reason: null },
     estop: { available: true, reason: null }, agent: { available: true, reason: null },
-    navigation: { available: true, reason: null, nav_goal: { preview: false, available: true, reason: null }, nav_joystick: { available: true, reason: null } },
+    navigation: { available: true, reason: null, nav_goal: { preview: false, available: true, reason: null }, nav_joystick: { available: true, reason: null }, nav_map: { available: false, reason: "Map unavailable" } },
   },
 };
 const state: State = {

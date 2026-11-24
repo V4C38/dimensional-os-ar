@@ -21,10 +21,12 @@ from dimos.ar.manipulation.service import ManipulationService, admit_manipulatio
 from dimos.ar.navigation.preview import NavigationPreviewService
 from dimos.ar.navigation.types import NavGoalFrame, NavGoalRequest, NavJoystickRequest
 from dimos.ar.replication.interaction import (
+    NAVIGATION_MAP_SOURCE,
     InteractionCoordinator,
     InteractionKind,
     InteractionRequest,
     InteractionResult,
+    NavigationMapTarget,
     SharedTarget,
 )
 from dimos.ar.robot.agent_control import ARAgentControlSpec
@@ -55,6 +57,7 @@ class InteractionPorts:
     prepare_outbound: Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
     operation_stopped: Callable[[], bool] = lambda: False
     retire_navigation: Callable[[], object] = lambda: None
+    commit_map: Callable[[NavigationMapTarget], SharedTarget | None] | None = None
 
 
 class InteractionController:
@@ -217,6 +220,9 @@ class InteractionController:
     def handle_request(self, request: InteractionRequest, client_id: str) -> None:
         if self._closed:
             return
+        if request.action == "takeover" and request.source_id == NAVIGATION_MAP_SOURCE:
+            self._interaction_reply(request, client_id, "rejected", "invalid_map_acquisition")
+            return
         if self._ports.operation_stopped() and request.action in {"acquire", "takeover", "confirm", "mode"}:
             self._interaction_reply(request, client_id, "rejected", "operation_stopped")
             return
@@ -318,7 +324,9 @@ class InteractionController:
             }
         else:
             previous_target = self._state.target
-            result = self._state.handle(client_id, request, commit=self._ports.commit_target)
+            result = self._state.handle(
+                client_id, request, commit=self._ports.commit_target, commit_map=self._ports.commit_map
+            )
             self._reconcile_manipulation_authority(request, result, previous_target, manipulation)
             reply = result.wire()
         accepted_sample = reply.get("status") == "accepted" and request.action in {
@@ -541,6 +549,9 @@ class InteractionController:
                 client_id, msg.epoch, msg.lease_id, kind="navigation_planning"
             ):
                 self.drain_retirements()
+                return
+            authority = self._state.authority
+            if authority is not None and authority.source_id == NAVIGATION_MAP_SOURCE:
                 return
             target = self._state.target
             if target is None:

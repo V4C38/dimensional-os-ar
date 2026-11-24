@@ -5,6 +5,8 @@ pose/settings content and its revision are unchanged. Reset clears its group dra
 only after ownership and busy admission; it introduces no additional wire fields.
 The explicit interaction takeover action reuses acquisition fields and grants
 manual navigation authority only after native agent work has been fenced/stopped.
+Navigation-map bulk headers identify the shared frame and carry the native-to-shared
+rotation; their binary codec is owned by the bulk transport.
 """
 
 from __future__ import annotations
@@ -128,6 +130,7 @@ class HelloRequest:
     ts_client: float
     resume_token: str | None = None
     presence: bool = False
+    client_name: str = "AR client"
 
 
 @dataclass(frozen=True)
@@ -168,6 +171,15 @@ class LidarSettingsRequest(LidarSettings):
 
 
 @dataclass(frozen=True)
+class NavigationMapRequest:
+    subscription_id: str
+    sequence: int
+    enabled: bool
+    center: tuple[float, float] | None
+    radius_m: float = 6.0
+
+
+@dataclass(frozen=True)
 class StateRequest:
     pass
 
@@ -204,6 +216,7 @@ Inbound = (
     | EstopRequest
     | ResumeOperationRequest
     | LidarSettingsRequest
+    | NavigationMapRequest
     | StateRequest
     | LocalizationStartRequest
     | LocalizationTracking
@@ -230,7 +243,10 @@ def decode_hello_request(text: str) -> HelloRequest:
     presence = data.get("presence", False)
     if type(presence) is not bool:
         raise ValueError("invalid presence negotiation")
-    return HelloRequest(_finite_float(data, "ts_client"), token, presence)
+    name = data.get("client_name", "AR client")
+    if not isinstance(name, str) or not name.strip() or len(name) > 80 or not name.isprintable():
+        raise ValueError("invalid client name")
+    return HelloRequest(_finite_float(data, "ts_client"), token, presence, name.strip())
 
 
 def decode_inbound(text: str) -> Inbound:
@@ -302,6 +318,26 @@ def decode_inbound(text: str) -> Inbound:
         return ResumeOperationRequest(
             epoch=required_identifier(data.get("epoch"), "epoch"),
             stop_id=required_identifier(data.get("stop_id"), "stop_id"),
+        )
+
+    if msg_type == "navigation_map_request":
+        viewport_sequence = sequence(data)
+        if viewport_sequence is None or viewport_sequence > 2**53 - 1:
+            raise ValueError("invalid viewport sequence")
+        center = None
+        if "center" in data:
+            raw = data["center"]
+            if not isinstance(raw, list) or len(raw) != 2:
+                raise ValueError("expected map center XY")
+            center = (float(_finite_float({"x": raw[0]}, "x")),
+                      float(_finite_float({"y": raw[1]}, "y")))
+        enabled = _require_type(data, "enabled", bool)
+        radius = _finite_float(data, "radius_m") if enabled else 6.0
+        if not 0.5 <= radius <= 20.0:
+            raise ValueError("invalid viewport radius")
+        return NavigationMapRequest(
+            required_identifier(data.get("subscription_id"), "subscription_id"),
+            viewport_sequence, enabled, center, radius,
         )
 
     if msg_type == "lidar_settings_request":
@@ -570,6 +606,7 @@ class HelloBody:
     localization: LocalizationMetadata
     shared_frame_id: str
     nav_goal_preview: bool = False
+    nav_map: Capability = Capability(False, "navigation map not available on this source")
     server_info: dict[str, str] | None = None
     source: dict[str, Any] | None = None
 
@@ -592,6 +629,7 @@ class Hello:
     speech_transcription: bool = False
     speech_transcription_reason: str | None = None
     nav_goal_preview: bool = False
+    nav_map: Capability = Capability(False, "navigation map not available on this source")
     server_info: dict[str, str] | None = None
     source: dict[str, Any] | None = None
 
@@ -605,6 +643,7 @@ def encode_hello(hello: Hello) -> str:
     for name in CapabilityName:
         entry = _capability_wire(hello.capabilities[name])
         if name is CapabilityName.NAVIGATION:
+            entry["nav_map"] = _capability_wire(hello.nav_map)
             for key in NAVIGATION_INPUT_NAMES:
                 nested = hello.navigation_inputs.get(key)
                 if nested is None:

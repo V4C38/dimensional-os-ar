@@ -88,7 +88,7 @@ describe("navigation replication adapter", () => {
     const { collaboration, sent } = fixture();
     const joystick = new JoystickNavigationController({
       collaboration,
-      view: () => ({ connection: "ready", capabilities: { navigation: { nav_joystick: { available: true } } } }) as ARModuleSessionState,
+      view: () => ({ connection: "ready", capabilities: { navigation: { nav_joystick: { available: true }, nav_map: { available: false, reason: "Map unavailable" } } } }) as ARModuleSessionState,
       sendText: text => sent.push(JSON.parse(text)),
     });
     joystick.tick(0, { x: 1, y: 0 });

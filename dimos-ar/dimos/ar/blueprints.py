@@ -45,6 +45,7 @@ def _go2_ar_blueprint(source: MetaBlueprint, *, agent: bool = False) -> Blueprin
         *(adapter.blueprint(**native_args[original]) for original, adapter in replacements.items()),
         ARModule.blueprint(
             robot=RobotName.UNITREE_GO2,
+            navigation_map=True,
             agent=agent,
             object_detection=blueprint_has_object_detection(native),
         ),

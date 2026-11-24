@@ -33,6 +33,7 @@ from dimos.ar.navigation.control import (
     NavigationControlService,
     TeleCmdVelPublisher,
 )
+from dimos.ar.navigation.map_feed import NavigationGeometry, NavigationMapFeed
 from dimos.ar.navigation.preview import NavigationPreviewService, PreviewPlanner
 from dimos.ar.navigation.types import NavGoalRequest, NavJoystickRequest, NavState
 from dimos.ar.numeric import quaternion_yaw
@@ -40,6 +41,7 @@ from dimos.ar.replication.controller import InteractionController, InteractionPo
 from dimos.ar.replication.interaction import (
     InteractionKind,
     InteractionRequest,
+    NavigationMapTarget,
     SharedTarget,
 )
 from dimos.ar.robot.agent_control import ARAgentControlSpec
@@ -47,6 +49,7 @@ from dimos.ar.robot.agent_service import ARAgentService
 from dimos.ar.robot.capabilities import (
     NAV_GOAL,
     NAV_JOYSTICK,
+    Capability,
     CapabilityName,
     CapabilitySet,
 )
@@ -138,6 +141,7 @@ class LocalizationConfig(BaseModel):
 class ARModuleConfig(ModuleConfig):  # type: ignore[misc]
     robot_display_name: str | None = Field(default=None, min_length=1, max_length=80)
     object_detection: bool = False
+    navigation_map: bool = False
     stationary_base: ReferencePose | None = None
     robot: RobotName = RobotName.UNITREE_GO2
     port: int = 8787
@@ -342,6 +346,15 @@ class ARModule(Module):  # type: ignore[misc]
             self._nav_goal_coordinator = NavGoalCoordinator(
                 frames=lambda: self._localization.frames,
             )
+            self._navigation_map = NavigationMapFeed(
+                peers=self._ws_server.navigation_map_peers,
+                pose=self._odometry.latest,
+                identity=self._navigation_map_identity,
+                geometry=self._navigation_map_geometry,
+                frames=lambda: self._localization.frames,
+                available=lambda: self._has_navigation_map() and self._live_motion_ready(),
+                recording=self._recording_source,
+            )
             self._previews = NavigationPreviewService(
                 PreviewPlanner(global_config),
                 frames=lambda: self._localization.frames,
@@ -424,6 +437,7 @@ class ARModule(Module):  # type: ignore[misc]
                 agent_idle=lambda: self._agent_service.idle,
                 previews=lambda: self._previews,
                 commit_target=self._commit_shared_target,
+                commit_map=self._commit_map_target,
                 submit_goal=self._submit_navigation_goal,
                 cancel_joystick=self._cancel_tele_cmd_vel,
                 stop_navigation=lambda: self._safety.controlled_stop(),
@@ -533,6 +547,7 @@ class ARModule(Module):  # type: ignore[misc]
             ),
             ("manipulation", getattr(self, "_manipulation_service", None)),
             ("preview", getattr(self, "_previews", None)),
+            ("navigation map", getattr(self, "_navigation_map", None)),
             ("localization", getattr(self, "_localization", None)),
             ("native map", getattr(self, "_native_map", None)),
         ):
@@ -600,12 +615,28 @@ class ARModule(Module):  # type: ignore[misc]
             self._navigation_projection_task.add_done_callback(self._navigation_projection_done)
         self._loop.call_soon(self._broadcast_interaction)
 
+    def _has_navigation_map(self) -> bool:
+        return self.config.robot == RobotName.UNITREE_GO2 and (
+            getattr(self.config, "navigation_map", False) or self._recording_source
+        )
+
+    def _navigation_map_identity(self) -> tuple[str, int]:
+        return self._odometry.reference_id, int(getattr(self, "_recording_generation", self._link_generation))
+
+    def _navigation_map_geometry(self) -> NavigationGeometry:
+        if self._recording_source:
+            geometry: NavigationGeometry = getattr(self, "_recorded_navigation_geometry", (None, ()))
+            return geometry
+        return self._nav_goal_coordinator.native_geometry()
+
     def _hello_body(self, _client_id: str) -> HelloBody:
         return HelloBody(
             robot=self._profile.description,
             capabilities=self._capabilities.as_mapping(),
             navigation_inputs=self._capabilities.navigation_as_mapping(),
             nav_goal_preview=self._capabilities.supports_navigation(NAV_GOAL),
+            nav_map=Capability(True, None) if self._has_navigation_map()
+            else Capability(False, "navigation map not available on this source"),
             server_info=server_info(),
             odom_reference_id=self._odometry.reference_id,
             localization={"providers": [LocalizationProviderType(p.type) for p in self.config.localization.providers]},
@@ -655,7 +686,7 @@ class ARModule(Module):  # type: ignore[misc]
         publisher.publish(
             self._launcher_robot_name,
             status,
-            self._ws_server.active_client_ids,
+            self._ws_server.active_clients,
         )
 
     def _on_launcher_feedback(self, available: bool) -> None:
@@ -706,6 +737,7 @@ class ARModule(Module):  # type: ignore[misc]
                         orientation=orientation,
                         ts=pose.ts_server,
                         shared_frame_id=frames.shared_frame_id,
+                        source_generation=getattr(self, "_recording_generation", None),
                     ),
                 )
         self._localization.connect(client_id)
@@ -765,6 +797,8 @@ class ARModule(Module):  # type: ignore[misc]
             await asyncio.sleep(0.1)
 
     def _start_interaction_poll(self) -> None:
+        if self._has_navigation_map():
+            self._navigation_map.start()
         self._interaction_controller.start()
         if self._monitor_live_go2:
             self._link_task = asyncio.create_task(self._watch_robot_link())
@@ -815,6 +849,8 @@ class ARModule(Module):  # type: ignore[misc]
             return
         self._link_offline = True
         self._link_generation += 1
+        if map_feed := getattr(self, "_navigation_map", None):
+            map_feed.reset()
         self._cancel_tele_cmd_vel()
         self._interaction_controller.state.stop("robot_link_lost")
         self._interaction_controller.stop_agent()
@@ -847,7 +883,22 @@ class ARModule(Module):  # type: ignore[misc]
             return True
         return self._submit_navigation_goal(NavGoalRequest(target.position, target.orientation))
 
-    def _submit_navigation_goal(self, msg: NavGoalRequest) -> bool:
+    def _commit_map_target(self, target: NavigationMapTarget) -> SharedTarget | None:
+        if (
+            not self._has_navigation_map()
+            or not self._capabilities.supports_navigation(NAV_GOAL)
+            or (target.odom_reference_id, target.source_generation) != self._navigation_map_identity()
+            or not self._navigation_map.contains(target.position)
+        ):
+            return None
+        goal, request = self._nav_goal_coordinator.prepare_map_goal(target.position)
+        if not self._submit_navigation_goal(request, native_goal=goal):
+            return None
+        return SharedTarget(request.position, request.orientation, 0, "committed", float(goal.ts), 0)
+
+    def _submit_navigation_goal(
+        self, msg: NavGoalRequest, *, native_goal: PoseStamped | None = None
+    ) -> bool:
         service = self._navigation_service
         if (
             service is None
@@ -857,14 +908,15 @@ class ARModule(Module):  # type: ignore[misc]
             return False
         if isinstance(service, NavigationControlService) and (service.stop_pending or service.faulted):
             return False
-        goal = self._nav_goal_coordinator.submit_goal(msg)
-        self._broadcast_state()
+        goal = native_goal or self._nav_goal_coordinator.prepare_shared_goal(msg)
         if not service.submit(
             goal,
             self._interaction_controller.state.epoch,
             self._interaction_controller.state.revision,
         ):
             return False
+        self._nav_goal_coordinator.accept_goal(goal)
+        self._broadcast_state()
         yaw = PoseStamped(position=list(msg.position), orientation=list(msg.orientation)).yaw
         self._interaction_controller.state.set_active_goal(
             {"type": "nav_goal", "shared_frame_id": self._localization.frames.shared_frame_id,
@@ -911,6 +963,8 @@ class ARModule(Module):  # type: ignore[misc]
         return self._interaction_controller.handle_manipulation(request, client_id, clock_offset)
 
     async def handle_global_costmap(self, msg: OccupancyGrid) -> None:
+        if map_feed := getattr(self, "_navigation_map", None):
+            map_feed.update_grid(msg)
         await self._previews.update_costmap(msg)
         self._broadcast_state()
 
@@ -1132,7 +1186,15 @@ class ARModule(Module):  # type: ignore[misc]
                 return
             msg = copy.copy(msg)
             msg.ts = timestamp
-        await self._state_publisher.publish_lidar_async(msg, lidar=self._lidar_settings)
+        if map_feed := getattr(self, "_navigation_map", None):
+            map_feed.update_lidar(msg)
+        source_generation = getattr(self, "_recording_generation", None)
+        if source_generation is None:
+            await self._state_publisher.publish_lidar_async(msg, lidar=self._lidar_settings)
+        else:
+            await self._state_publisher.publish_lidar_async(
+                msg, lidar=self._lidar_settings, source_generation=source_generation
+            )
 
     async def handle_go2_peer_online(self, msg: Bool) -> None:
         if not self._monitor_live_go2:
@@ -1142,11 +1204,14 @@ class ARModule(Module):  # type: ignore[misc]
             self._retire_stale_link()
 
     async def handle_odom(self, msg: PoseStamped) -> None:
+        await self._accept_odom(msg)
+
+    async def _accept_odom(self, msg: PoseStamped, *, received_at: float | None = None) -> None:
         if getattr(self, "_go2_peer_online", None) is False:
             return
         first_pose = self._odometry.latest() is None
         try:
-            accepted = self._odometry.accept(msg)
+            accepted = self._odometry.accept(msg, received_at=received_at)
         except RobotSourceChangedError:
             self._retire_robot_source()
             return
@@ -1165,7 +1230,11 @@ class ARModule(Module):  # type: ignore[misc]
                 accepted.sample, source_generation=self._link_generation
             )
         else:
-            self._state_publisher.publish_odom(accepted.sample)
+            source_generation = getattr(self, "_recording_generation", None)
+            if source_generation is None:
+                self._state_publisher.publish_odom(accepted.sample)
+            else:
+                self._state_publisher.publish_odom(accepted.sample, source_generation=source_generation)
             if first_pose:
                 self._publish_launcher_connections()
         self._robot_observations.expire(self._odometry.travel())
@@ -1183,6 +1252,8 @@ class ARModule(Module):  # type: ignore[misc]
         self._interaction_controller.state.reset()
         self._broadcast_interaction()
         self._odometry.retire()
+        if map_feed := getattr(self, "_navigation_map", None):
+            map_feed.reset()
         if getattr(self, "_monitor_live_go2", False):
             self._link_generation += 1
             self._live_odom_at = None

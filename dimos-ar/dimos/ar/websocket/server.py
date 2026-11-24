@@ -46,6 +46,7 @@ from dimos.ar.websocket.protocol import (
     LocalizationObservation,
     LocalizationStartRequest,
     LocalizationTracking,
+    NavigationMapRequest,
     ResumeOperationRequest,
     StateRequest,
     TimeSync,
@@ -124,6 +125,7 @@ class ControlConnection:
     bulk_peer: BulkPeer | None = None
     capture_id: str | None = None
     presence: bool = False
+    client_name: str = "AR client"
     presence_budget: TokenBucket = dataclass_field(default_factory=lambda: TokenBucket(16_384, 16_384))
     retired: bool = False
 
@@ -232,7 +234,7 @@ class WebSocketServer:
         )
         self._bridge_scheduled = False
         self._bridge_task: asyncio.Task[None] | None = None
-        self._bridge_binary: dict[str | None, tuple[str, bytes]] = {}
+        self._bridge_binary: dict[str | None, tuple[str, bytes, int | None]] = {}
         self._bulk_preparations: set[asyncio.Task[None]] = set()
         self._closed = False
 
@@ -247,6 +249,11 @@ class WebSocketServer:
     @property
     def active_client_ids(self) -> tuple[str, ...]:
         return tuple(connection.client_id for connection in self._active_connections())
+
+    @property
+    def active_clients(self) -> tuple[tuple[str, str], ...]:
+        return tuple((connection.client_id, connection.client_name)
+                     for connection in self._active_connections())
 
     @property
     def logical_session_count(self) -> int:
@@ -265,6 +272,9 @@ class WebSocketServer:
             for session in self._sessions.values()
             if session.connection is not None
         )
+
+    def navigation_map_peers(self) -> tuple[BulkPeer, ...]:
+        return tuple(peer for peer in self._peers() if peer.navigation_map_request is not None)
 
     def _peers(self) -> tuple[BulkPeer, ...]:
         return tuple(
@@ -693,7 +703,7 @@ class WebSocketServer:
             body = await self._hello_worker.run(lambda: self._hello_supplier(client_id))
             token = secrets.token_hex(32)
             next_resume_token = secrets.token_hex(32) if resume_handle is not None else session.resume_token
-            connection = ControlConnection(websocket, client_id, time_sync, token, presence=hello_request.presence)
+            connection = ControlConnection(websocket, client_id, time_sync, token, presence=hello_request.presence, client_name=hello_request.client_name)
             admission = HandshakeAdmission(session, connection, resume_handle)
             self._admissions[websocket] = admission
             req = getattr(websocket, "request", None)
@@ -706,6 +716,7 @@ class WebSocketServer:
                 capabilities=body.capabilities,
                 navigation_inputs=body.navigation_inputs,
                 nav_goal_preview=body.nav_goal_preview,
+                nav_map=body.nav_map,
                 server_info=body.server_info,
                 source=body.source,
                 localization=body.localization,
@@ -1080,6 +1091,13 @@ class WebSocketServer:
             if self._on_interaction_request is not None:
                 self._on_interaction_request(inbound, client_id)
             return
+        if isinstance(inbound, NavigationMapRequest):
+            connection = self._connection(client_id)
+            if connection is not None and connection.websocket is websocket:
+                peer = connection.bulk_peer
+                if peer is not None:
+                    peer.set_navigation_map(inbound)
+            return
         if isinstance(inbound, NavGoalRequest):
             if self._on_nav_goal_request is not None:
                 self._on_nav_goal_request(inbound, websocket, client_id)
@@ -1249,7 +1267,8 @@ class WebSocketServer:
                     (websocket, _kind), text = self._bridge_latest.popitem(last=False)
                 elif self._bridge_binary:
                     client_id, data = self._bridge_binary.popitem()
-                    self._queue_bulk_binary(client_id, data[1], shared_frame_id=data[0])
+                    self._queue_bulk_binary(client_id, data[1], shared_frame_id=data[0],
+                                            source_generation=data[2])
                     continue
                 else:
                     self._bridge_scheduled = False
@@ -1306,35 +1325,42 @@ class WebSocketServer:
 
         asyncio.run_coroutine_threadsafe(close_connections(), self._loop)
 
-    def schedule_broadcast_binary(self, data: bytes, *, shared_frame_id: str = "") -> None:
-        self._post_binary(None, data, shared_frame_id=shared_frame_id)
+    def schedule_broadcast_binary(
+        self, data: bytes, *, shared_frame_id: str = "", source_generation: int | None = None
+    ) -> None:
+        self._post_binary(None, data, shared_frame_id=shared_frame_id,
+                          source_generation=source_generation)
 
     def schedule_send_binary_to_client(
-        self, client_id: str, data: bytes, *, shared_frame_id: str = ""
+        self, client_id: str, data: bytes, *, shared_frame_id: str = "",
+        source_generation: int | None = None,
     ) -> None:
-        self._post_binary(client_id, data, shared_frame_id=shared_frame_id)
+        self._post_binary(client_id, data, shared_frame_id=shared_frame_id,
+                          source_generation=source_generation)
 
     def _post_binary(
-        self, client_id: str | None, data: bytes, *, shared_frame_id: str
+        self, client_id: str | None, data: bytes, *, shared_frame_id: str,
+        source_generation: int | None = None,
     ) -> None:
         if self._closed or len(data) > 65_536:
             return
         with self._bridge_lock:
-            self._bridge_binary[client_id] = (shared_frame_id, data)
+            self._bridge_binary[client_id] = (shared_frame_id, data, source_generation)
             if not self._bridge_scheduled:
                 self._bridge_scheduled = True
                 self._loop.call_soon_threadsafe(self._start_bridge)
 
     def _queue_bulk_binary(
-        self, client_id: str | None, data: bytes, *, shared_frame_id: str
+        self, client_id: str | None, data: bytes, *, shared_frame_id: str,
+        source_generation: int | None = None,
     ) -> None:
         if client_id is None:
-            for peer in self._peers():
-                peer.lidar(data, shared_frame_id=shared_frame_id)
+            peers = self._peers()
         else:
             connection = self._connection(client_id)
-            if connection is not None and connection.bulk_peer is not None:
-                connection.bulk_peer.lidar(data, shared_frame_id=shared_frame_id)
+            peers = (connection.bulk_peer,) if connection is not None and connection.bulk_peer is not None else ()
+        for peer in peers:
+            peer.lidar(data, shared_frame_id=shared_frame_id, source_generation=source_generation)
 
     def schedule_send_to(self, websocket: ws_server.ServerConnection, text: str) -> None:
         self._post_text(websocket, text)

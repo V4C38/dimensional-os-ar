@@ -107,3 +107,87 @@ async def test_playback_preserves_producer_timing_despite_delayed_camera_deliver
     assert module._odometry.history.latest() is latest
     assert latest.ts_server == pytest.approx(110.1)
     assert module._state_publisher.publish_odom.call_count == 3
+
+
+def test_go2_replay_rebuilds_costmap_without_later_scans(tmp_path):
+    from threading import Event
+
+    import numpy as np
+
+    from dimos.ar.replay import RecordingReader
+    from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
+    from dimos.msgs.sensor_msgs.PointCloud2 import PointCloud2
+
+    path = tmp_path / "recording.db"
+    store = SqliteStore(path=str(path))
+    store.start()
+    try:
+        odom = store.stream("pose", PoseStamped)
+        lidar = store.stream("scan", PointCloud2)
+        xy = np.stack(np.meshgrid(np.arange(0, 1, 0.03), np.arange(0, 1, 0.03)), axis=-1).reshape(-1, 2)
+        floor = np.column_stack((xy, np.zeros(len(xy))))
+        for i in range(3):
+            stamp = 10.0 + i
+            odom.append(PoseStamped(ts=stamp, position=[1 + i, 0, 0]), ts=stamp)
+            lidar.append(PointCloud2.from_numpy(floor + np.array([i, 0, 0]), timestamp=stamp), ts=stamp)
+    finally:
+        store.stop()
+    source = RecordingReader(str(path), {"odom": "pose", "lidar": "scan"}, True)
+    try:
+        early, grid = source.advance(1.0, True, Event())
+        assert grid is not None
+        assert dict(early)["odom"].ts == 11
+        initial = grid.grid.copy()
+        _, later = source.advance(2.0, True, Event())
+        assert later is not None
+        assert later.grid.shape != initial.shape
+        _, rebuilt = source.advance(1.0, True, Event())
+        assert rebuilt is not None
+        assert np.array_equal(rebuilt.grid, initial)
+    finally:
+        source.close()
+
+
+def test_replay_seek_retires_old_observations_and_preserves_resume_intent(monkeypatch):
+    from threading import Event
+    import time
+    from unittest.mock import Mock
+
+    from dimos.ar.replay import RecordedARModule
+
+    monkeypatch.setattr(time, "monotonic", lambda: 40.0)
+    module = object.__new__(RecordedARModule)
+    module._playback_ready = True
+    module._playback_state = "playing"
+    module._playback_cursor = 0
+    module._playback_start = 35
+    module._duration = 30
+    module._recording_generation = 2
+    module._advance_cancel = Event()
+    module._pending_seek = None
+    module._last_samples = {"odom": object()}
+    module._odometry = Mock()
+    module._state_publisher = Mock()
+    module._robot_observations = Mock()
+    module._localization = Mock()
+    module._navigation_map = Mock()
+    module._broadcast_state = Mock()
+
+    assert module._command({"action": "pause"})["elapsed_s"] == 5
+    assert module._command({"action": "seek", "elapsed_s": 7}) == {
+        "state": "seeking", "duration_s": 30, "elapsed_s": 7, "generation": 3,
+    }
+    assert module._pending_seek == (7, "paused")
+    assert module._advance_cancel.is_set()
+    assert module._last_samples == {}
+    module._navigation_map.reset.assert_called_once()
+    module._command({"action": "play"})
+    module._command({"action": "seek", "elapsed_s": 9})
+    assert module._pending_seek == (9, "playing")
+    module._command({"action": "stop"})
+    assert module._pending_seek == (0, "stopped")
+    assert module._recording_generation == 5
+    module._pending_seek = None
+    module._playback_state = "ended"
+    module._command({"action": "seek", "elapsed_s": 4})
+    assert module._pending_seek == (4, "playing")

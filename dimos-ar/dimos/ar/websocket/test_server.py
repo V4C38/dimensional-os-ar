@@ -1217,3 +1217,16 @@ async def test_old_socket_cannot_detach_or_retire_resumed_connection_resources()
     finally:
         server._encoder.close()
         server._hello_worker.close()
+
+
+@pytest.mark.asyncio
+async def test_client_device_name_is_available_to_launcher(harness: ServerHarness) -> None:
+    async with websockets.connect(f"ws://127.0.0.1:{harness.port}/ws") as ws:
+        await ws.send(json.dumps({
+            "type": "hello_request", "protocol_version": 2, "ts_client": 1,
+            "client_name": "Quest 3S",
+        }))
+        hello = json.loads(await ws.recv())
+        await harness.wait_for_connection(hello["client_id"])
+        assert harness._server is not None
+        assert (hello["client_id"], "Quest 3S") in harness._server.active_clients

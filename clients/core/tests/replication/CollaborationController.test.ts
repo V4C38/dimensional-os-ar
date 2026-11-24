@@ -281,3 +281,39 @@ it("bounds retired acquisition replies across repeated competing ownership cycle
   expect(cancellations).toHaveLength(128);
   expect(cancellations.at(-1)).toMatchObject({ lease_id: retired.at(-1).request_id });
 });
+
+describe("native navigation map confirmation", () => {
+  const target = { position: [2, 3] as const, odom_reference_id: "odom", source_generation: 4 };
+
+  it("keeps map acquisition exclusive and observes terminal acceptance", async () => {
+    const { core, messages } = fixture();
+    const goal = core.submitNavigationMapGoal(target);
+    const acquire = messages[0];
+    expect(acquire).toMatchObject({ action: "acquire", kind: "navigation_planning", source_id: "navigation-map" });
+    expect(acquire.position).toBeUndefined();
+    expect(core.begin("navigation_planning", "world", pose(1))).toBe(false);
+    core.update(pose(2));
+    core.cancel(["navigation_planning"]);
+    expect(messages).toHaveLength(1);
+    core.accept({ type: "interaction_result", request_id: acquire.request_id, epoch: "robot", revision: 1,
+      status: "accepted", code: "acquired", lease_id: "map-lease" });
+    const confirm = messages[1];
+    expect(confirm).toMatchObject({ action: "confirm", lease_id: "map-lease", map_target: target });
+    expect(confirm.position).toBeUndefined();
+    core.accept({ type: "interaction_result", request_id: confirm.request_id, epoch: "robot", revision: 2,
+      status: "accepted", code: "released" });
+    await expect(goal).resolves.toBeUndefined();
+  });
+
+  it("retires a late grant after the map closes", async () => {
+    const { core, messages } = fixture();
+    const goal = core.submitNavigationMapGoal(target);
+    const declined = expect(goal).rejects.toThrow(/retired/);
+    const acquire = messages[0];
+    core.cancelPendingNavigationMapGoal();
+    core.accept({ type: "interaction_result", request_id: acquire.request_id, epoch: "robot", revision: 1,
+      status: "accepted", code: "acquired", lease_id: "late" });
+    expect(messages.map(message => message.action)).toEqual(["acquire", "cancel_acquire", "cancel"]);
+    await declined;
+  });
+});

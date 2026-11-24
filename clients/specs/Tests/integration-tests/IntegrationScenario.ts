@@ -129,7 +129,7 @@ export class ReviewScenario extends BaseScriptComponent {
       manipulation: { available: false, reason: "No arm" },
       object_detection: { available: false, reason: "No detector" },
       lidar: available, localization: available, estop: available, agent: available,
-      navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hand input only" } } };
+      navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hand input only" }, nav_map: { available: false, reason: "Map unavailable" } } };
     root.transport.connect = () => { };
     root.transport.close = () => { };
     root.transport.createSibling = () => this.peer;

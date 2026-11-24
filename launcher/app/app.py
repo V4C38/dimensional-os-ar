@@ -588,6 +588,28 @@ async def api_backend_stop(context: ContextDependency) -> dict[str, Any]:
     return context.manager.snapshot()
 
 
+class PlaybackCommandBody(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    session_id: str = Field(min_length=1, max_length=64)
+    action: Literal["play", "pause", "stop", "seek"]
+    elapsed_s: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+
+
+@runtime_routes.post("/api/replay/playback")
+async def api_replay_playback(body: PlaybackCommandBody, context: ContextDependency) -> Any:
+    if (body.action == "seek") != (body.elapsed_s is not None):
+        raise HTTPException(status_code=422, detail="A seek requires an elapsed time")
+    try:
+        return await context.manager.runtime.playback_command(
+            body.session_id, body.action, body.elapsed_s
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (OSError, TimeoutError, TypeError) as exc:
+        raise HTTPException(status_code=503, detail="Recording playback is unavailable") from exc
+
+
 @runtime_routes.get("/api/events")
 async def api_events(context: ContextDependency) -> StreamingResponse:
     async def event_stream() -> AsyncIterator[str]:

@@ -252,7 +252,7 @@ async def test_stop_during_build_is_not_blocked_by_process_lock(runtime, monkeyp
 
 
 @pytest.mark.asyncio
-async def test_backend_failure_during_build_retains_gateway_and_primary_error(
+async def test_backend_failure_during_build_discards_paired_preview_and_keeps_primary_error(
     runtime, monkeypatch
 ):
     mgr, children, spawn = runtime
@@ -277,10 +277,9 @@ async def test_backend_failure_during_build_retains_gateway_and_primary_error(
     assert not task.done()
     hold.set()
     await asyncio.wait_for(task, timeout=1)
-    assert spawn.await_count == 2
+    assert spawn.await_count == 1
     assert mgr.status.error == "Scene constructor incompatible"
-    await preview_ready(mgr, children[1])
-    assert mgr.status.webxr_url is not None
+    assert mgr.status.webxr_url is None
 
 
 @pytest.mark.asyncio
@@ -385,7 +384,7 @@ async def test_gateway_dependency_install_is_cancelled_without_orphan(runtime, m
 
 
 @pytest.mark.asyncio
-async def test_running_backend_failure_retains_gateway_and_reports_error(runtime):
+async def test_running_backend_failure_stops_paired_preview_and_reports_error(runtime):
     mgr, children, _spawn = runtime
     await mgr.start_armodule(blueprint="unitree_go2_ar")
     starting = mgr.runtime.pending_webxr_start
@@ -395,8 +394,8 @@ async def test_running_backend_failure_retains_gateway_and_reports_error(runtime
     gateway = children[1]
     children[0].finish(1)
     await asyncio.wait_for(error_status(mgr), 1)
-    assert gateway.returncode is None
-    assert mgr.runtime.webxr.process is gateway
+    assert gateway.returncode == 0
+    assert mgr.runtime.webxr.process is None
     assert mgr.runtime.backend.process is None
     assert mgr.status.phase is Phase.ERROR
 

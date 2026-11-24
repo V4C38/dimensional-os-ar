@@ -19,7 +19,7 @@ it("reserves a taller agent page and camera capture state without growing with t
 });
 
 it.each([
-  ["manual", "status", 0.018], ["agent", "status", 0.018], ["settings", "sound", 0.064],
+  ["manual", "status", 0.018], ["agent", "status", 0.018], ["settings", "debug", 0.064],
   ["sensors", "statistics", 0.1], ["diagnostics", "logs", 0.4], ["alignment", "actions", 0.064],
 ] as const)("reserves a clear gap above Emergency Stop on %s", (name, lastRow, rowHeight) => {
   const profile = RUNTIME_LAYOUTS[name];

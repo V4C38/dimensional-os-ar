@@ -1,6 +1,6 @@
 export class LauncherSession {
-  constructor({ publishStatus, publishConnections, publishLog, refreshHardware, retireRequests }) {
-    Object.assign(this, { publishStatus, publishConnections, publishLog, refreshHardware, retireRequests });
+  constructor({ publishStatus, publishConnections, publishPlayback = () => {}, publishLog, refreshHardware, retireRequests }) {
+    Object.assign(this, { publishStatus, publishConnections, publishPlayback, publishLog, refreshHardware, retireRequests });
     this.status = {};
     this.revision = 0;
     this.source = null;
@@ -26,7 +26,10 @@ export class LauncherSession {
       try { data = JSON.parse(event.data); } catch (_) { return; }
       if (data.type === "log") this.publishLog(data.line);
       else if (data.type === "status") this.publish(data);
-      else if (data.type === "connections") {
+      else if (data.type === "playback") {
+        this.observe({ ...this.status, playback: data.playback });
+        this.publishPlayback(data.playback);
+      } else if (data.type === "connections") {
         this.observe({ ...this.status, connections: data.connections });
         this.publishConnections(this.status);
       }

@@ -79,6 +79,7 @@ describe("requestNavGoal", () => {
         reason: "navigation not supported",
         nav_goal: { preview: false, available: false, reason: "nav_goal not available on this robot" },
         nav_joystick: { available: false, reason: "nav_joystick not available on this robot" },
+        nav_map: { available: false, reason: "Map unavailable" },
       },
     });
     expect(() => requestNavGoal(session, GOAL)).toThrow(
@@ -95,6 +96,7 @@ describe("requestNavGoal", () => {
         reason: null,
         nav_goal: { preview: false, available: false, reason: "nav_goal not available on this robot" },
         nav_joystick: { available: true, reason: null },
+        nav_map: { available: false, reason: "Map unavailable" },
       },
     });
     expect(() => requestNavGoal(session, GOAL)).toThrow(
@@ -145,6 +147,7 @@ describe("requestNavJoystick", () => {
         reason: null,
         nav_goal: { preview: false, available: true, reason: null },
         nav_joystick: { available: false, reason: "nav_joystick not available on this robot" },
+        nav_map: { available: false, reason: "Map unavailable" },
       },
     });
     expect(() =>

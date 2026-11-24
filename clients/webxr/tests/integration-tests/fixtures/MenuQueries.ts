@@ -20,7 +20,7 @@ export function installMenuQueries(): void {
       let result: any;
       menu.panel.traverse((object: any) => {
         const view = menu.scrollView(object);
-        if (text && view?.text === text && visible(object)) result = view;
+        if (text && view?.text === text && visible(view)) result = view;
       });
       return result;
     },

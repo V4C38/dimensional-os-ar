@@ -111,7 +111,7 @@ export class ReviewScenario extends BaseScriptComponent {
         manipulation: yes,
         localization: yes,
         lidar: no, agent: no, estop: yes,
-        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no } } });
+        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no, nav_map: { available: false, reason: "Map unavailable" } } } });
     if (root.session.view().connection !== "ready")
       throw new Error(`Native manipulation fixture handshake failed: ${root.session.view().lastError}`);
     this.peer.reset();

@@ -142,6 +142,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
     const clientTrackingOriginStore = new ClientTrackingOriginStore();
     this.clientTrackingOriginStore = clientTrackingOriginStore;
     const session = new ARModuleSession({
+      clientName: () => "SPECS",
       transport,
       clock,
       clientTrackingOriginStore,

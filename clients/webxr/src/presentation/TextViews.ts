@@ -140,7 +140,7 @@ export class ScrollableTextView extends xb.TextView {
     if (text) text.renderOrder = this.renderOrder + 1;
     const overflow = this.maxScroll > 0.001;
     this.scrollHit.visible = this.track.visible = this.thumb.visible = overflow;
-    this.bodyHit.visible = this.bodyHit.userData.bodyScrollable === true;
+    this.bodyHit.visible = this.bodyHit.userData.bodyScrollable === true && overflow;
     const units = this.unitsPerMeter;
     const { width, hitWidth, minimumThumb } = DIMOS_AR_DESIGN.scroll;
     const x = this.rangeX / 2 - hitWidth * units / 2;

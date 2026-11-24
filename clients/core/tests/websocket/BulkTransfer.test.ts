@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { Buffer } from "node:buffer";
 import { decodeManipulation } from "../../src/manipulation/ManipulationProtocol";
-import { BULK_ASSET_BYTES, BULK_CACHE_BYTES, BulkTransfer, utf8Bytes } from "../../src/websocket/BulkTransfer";
+import { BULK_ASSET_BYTES, BULK_CACHE_BYTES, BulkTransfer, decodeNavigationMap, decodeNavigationMapHeader, utf8Bytes } from "../../src/websocket/BulkTransfer";
 import { PairedBulk } from "../support/PairedBulk";
 
 function fixture() {
@@ -314,4 +314,48 @@ it("accepts the same articulated model through inline and bulk decoding", () => 
   expect(hydrated.pending).toBe(false);
   expect(() => decodeManipulation(hydrated.value)).not.toThrow();
   expect(hydrated.value.model).toEqual(model);
+});
+
+it("decodes signed map cells and bounded native height and route geometry", () => {
+  const fields = {
+    subscription_id: "viewport", sequence: 2, snapshot_sequence: 7,
+    odom_reference_id: "native", source_generation: 3,
+    shared_frame_id: "shared", map_odom_rotation: [0, 0, 0, 1],
+    width: 2, height: 1, resolution: 0.05, origin: [-1, 2],
+    robot: [0, 3, 0.5], target: [1, 3], height_count: 1, route_count: 1,
+    total_bytes: 30,
+  };
+  const header = decodeNavigationMapHeader(fields);
+  const bytes = new Uint8Array(30);
+  bytes.set([255, 100]);
+  const view = new DataView(bytes.buffer);
+  [0, 3, 1, 0, 3, 1, 3].forEach((number, index) => view.setFloat32(2 + index * 4, number, true));
+  const snapshot = decodeNavigationMap(header, bytes);
+  const display = new Uint8Array(2);
+  snapshot.cells.copyDisplayBytes(display);
+  expect([...display]).toEqual([0, 101]);
+  expect([snapshot.cells.costAt(0), snapshot.cells.costAt(1)]).toEqual([-1, 100]);
+  expect(snapshot).toMatchObject({
+    heights: [[0, 3, 1]], route: [[0, 3, 1, 3]], target: [1, 3],
+  });
+  expect(() => decodeNavigationMapHeader({ ...fields, route_count: 257 })).toThrow(/route_count/);
+  expect(() => decodeNavigationMapHeader({ ...fields, map_odom_rotation: [0, 0, 0, 0] })).toThrow(/rotation/);
+  expect(() => decodeNavigationMapHeader({ ...fields, total_bytes: 29 })).toThrow(/payload length/);
+  view.setFloat32(2, Infinity, true);
+  expect(() => decodeNavigationMap(header, bytes)).toThrow(/coordinate/);
+});
+
+it("drops an invalid optional map header and continues to receive LiDAR", () => {
+  const peer = new PairedBulk();
+  const lidar = vi.fn(), failed = vi.fn(), invalidMap = vi.fn();
+  const bulk = new BulkTransfer({ now: () => 0 }, () => {}, lidar, failed, vi.fn(), () => true, invalidMap);
+  bulk.connect(peer, { client_id: "a", bulk_token: "token", bulk_epoch: "fixture-epoch", shared_frame_id: "fixture-map" });
+  peer.receive({ type: "bulk_binary_begin", kind: "navigation_map", epoch: "fixture-epoch", id: 0, total_bytes: 1 });
+  bulk.tick();
+  const sample = new Uint8Array(16);
+  peer.lidar(sample);
+  bulk.tick();
+  expect(invalidMap).toHaveBeenCalledOnce();
+  expect(failed).not.toHaveBeenCalled();
+  expect(lidar).toHaveBeenCalledWith(sample, undefined);
 });

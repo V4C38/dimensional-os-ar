@@ -1,4 +1,5 @@
 import type { BindableWebSocketTransport, ClientClock } from "../ClientContracts";
+import type { NavigationMapSnapshot } from "../ClientContracts";
 import { validateManipulationModel } from "../manipulation/ManipulationValidation";
 
 export const BULK_RECORD_BYTES = 16384;
@@ -81,13 +82,16 @@ export class BulkTransfer {
   private uploadSerial = 0;
   private upload: { id: number; kind: "localization" | "speech"; data: Uint8Array; offset: number; started: number; admitted: boolean } | null = null;
   private lastUploadResult: BulkUploadResult | null = null;
-  private download: { id: number; bytes: Uint8Array; offset: number; started: number; shared_frame_id: string } | null = null;
+  private download: { id: number; bytes: Uint8Array; offset: number; started: number; shared_frame_id: string; sourceGeneration?: number; map?: NavigationMapHeader } | null = null;
   private deadline = 0;
   private generation = 0;
   private lastProgressAt = 0;
   private counters = { receivedBytes: 0, sentBytes: 0, records: 0, maxQueueBytes: 0, maxCacheBytes: 0, maxWorkMs: 0, dropped: 0, misses: 0 };
-  constructor(private readonly clock: ClientClock, private readonly changed: () => void, private readonly lidar: (bytes: Uint8Array) => void,
-    private readonly failed: (reason: string) => void) {}
+  constructor(private readonly clock: ClientClock, private readonly changed: () => void, private readonly lidar: (bytes: Uint8Array, sourceGeneration?: number) => void,
+    private readonly failed: (reason: string) => void,
+    private readonly navigationMap?: (snapshot: NavigationMapSnapshot) => void,
+    private readonly wantsNavigationMap?: (header: NavigationMapHeader) => boolean,
+    private readonly invalidNavigationMap?: (error: unknown) => void) {}
   connect(port: BindableWebSocketTransport, hello: { client_id: string; bulk_token: string; bulk_epoch: string; shared_frame_id: string }): void {
     this.reset(); this.port = port; this.epoch = hello.bulk_epoch; this.sharedFrame = hello.shared_frame_id; this.deadline = this.clock.now() + 5;
     const generation = this.generation;
@@ -112,7 +116,7 @@ export class BulkTransfer {
     if (sharedFrame === this.sharedFrame) return;
     this.sharedFrame = sharedFrame;
     this.cancelUpload("localization");
-    this.download = null;
+    if (!this.download?.map) this.download = null;
     for (const [id, entry] of this.entries) if (entry.kind === "route") {
       this.removeEntry(id); this.ignore(id);
     }
@@ -277,9 +281,26 @@ export class BulkTransfer {
       this.upload = null; this.changed(); return;
     }
     if (raw.type === "bulk_binary_begin") {
-      if (raw.shared_frame_id !== this.sharedFrame) { this.download = null; return; }
-      if (raw.epoch !== this.epoch || raw.kind !== "lidar" || !Number.isSafeInteger(raw.id) || !Number.isSafeInteger(raw.total_bytes) || Number(raw.total_bytes) < 16 || Number(raw.total_bytes) > 65536) throw new Error("Invalid LiDAR bulk header");
-      this.download = { id: Number(raw.id), bytes: new Uint8Array(Number(raw.total_bytes)), offset: 0, started: this.clock.now(), shared_frame_id: String(raw.shared_frame_id) }; return;
+      if (raw.epoch !== this.epoch || !Number.isSafeInteger(raw.id) || Number(raw.id) < 0 ||
+          Number(raw.id) > 0xffffffff || !Number.isSafeInteger(raw.total_bytes) || Number(raw.total_bytes) < 0 || Number(raw.total_bytes) > 65536) {
+        throw new Error("Invalid bulk binary header");
+      }
+      let map: NavigationMapHeader | undefined;
+      if (raw.kind === "navigation_map") {
+        try { map = decodeNavigationMapHeader(raw); }
+        catch (error) { this.download = null; this.dropNavigationMap(error); return; }
+        if (!this.wantsNavigationMap?.(map)) { this.download = null; return; }
+      } else {
+        if (raw.kind !== "lidar" || Number(raw.total_bytes) < 16) throw new Error("Invalid LiDAR bulk header");
+        if (raw.shared_frame_id !== this.sharedFrame) { this.download = null; return; }
+        if (raw.source_generation !== undefined && (!Number.isSafeInteger(raw.source_generation) || Number(raw.source_generation) < 0)) {
+          throw new Error("Invalid LiDAR source generation");
+        }
+      }
+      this.download = { id: Number(raw.id), bytes: new Uint8Array(Number(raw.total_bytes)), offset: 0,
+        started: this.clock.now(), shared_frame_id: String(raw.shared_frame_id),
+        sourceGeneration: raw.source_generation as number | undefined, map };
+      return;
     }
     if (raw.type !== "bulk_record") throw new Error("Unknown bulk frame");
     const ref = reference(raw); if (ref.epoch !== this.epoch) throw new Error("Bulk record epoch mismatch");
@@ -332,10 +353,19 @@ export class BulkTransfer {
     try {
       if (!this.ready || data.byteLength < 12 || data.byteLength > BULK_RECORD_BYTES) throw new Error("Invalid bulk binary frame");
       const header = new DataView(data.buffer, data.byteOffset, data.byteLength), download = this.download;
-      if (!download || header.getUint32(4, true) !== download.id || download.shared_frame_id !== this.sharedFrame) return;
+      if (!download || header.getUint32(4, true) !== download.id || !download.map && download.shared_frame_id !== this.sharedFrame) return;
       if (header.getUint32(0, true) !== BINARY_MAGIC || header.getUint32(4, true) !== download.id || header.getUint32(8, true) !== download.offset || download.offset + data.byteLength - 12 > download.bytes.length) throw new Error("Invalid bulk binary ordering");
       download.bytes.set(data.subarray(12), download.offset); download.offset += data.byteLength - 12;
-      if (download.offset === download.bytes.length) { this.download = null; this.lidar(download.bytes); }
+      if (download.offset === download.bytes.length) {
+        this.download = null;
+        if (download.map) {
+          if (!this.wantsNavigationMap?.(download.map)) return;
+          let snapshot: NavigationMapSnapshot;
+          try { snapshot = decodeNavigationMap(download.map, download.bytes); }
+          catch (error) { this.dropNavigationMap(error); return; }
+          this.navigationMap?.(snapshot);
+        } else this.lidar(download.bytes, download.sourceGeneration);
+      }
     } catch (error) { this.fail(error instanceof Error ? error.message : String(error)); }
   }
   private request(ref: BulkRef, kind: Kind): void {
@@ -380,5 +410,88 @@ export class BulkTransfer {
     try { this.port?.sendText(text); this.counters.sentBytes += utf8Bytes(text); }
     catch (error) { this.fail(error instanceof Error ? error.message : String(error)); }
   }
+  private dropNavigationMap(error: unknown): void {
+    this.counters.dropped++;
+    this.invalidNavigationMap?.(error);
+  }
   private fail(reason: string): void { this.reset(); this.failed(reason); }
+}
+
+
+export type NavigationMapHeader = Omit<NavigationMapSnapshot, "cells" | "heights" | "route"> & {
+  height_count: number;
+  route_count: number;
+};
+
+export function decodeNavigationMapHeader(data: Record<string, unknown>): NavigationMapHeader {
+  const bounded = (key: string, min: number, max: number): number => {
+    const value = data[key];
+    if (typeof value !== "number" || !Number.isSafeInteger(value) || value < min || value > max) throw new Error(`Invalid navigation map ${key}`);
+    return value;
+  };
+  const vector = <T extends readonly number[]>(key: string, length: number): T => {
+    const value = data[key];
+    if (!Array.isArray(value) || value.length !== length || !value.every(Number.isFinite)) {
+      throw new Error(`Invalid navigation map ${key}`);
+    }
+    return Object.freeze([...value]) as unknown as T;
+  };
+  const stringField = (key: string): string => {
+    const value = data[key];
+    if (typeof value !== "string" || !value || value.length > 128) throw new Error(`Invalid navigation map ${key}`);
+    return value;
+  };
+  const resolution = data.resolution;
+  const map_odom_rotation = vector<readonly [number, number, number, number]>("map_odom_rotation", 4);
+  if (Math.abs(Math.hypot(...map_odom_rotation) - 1) > 0.001) throw new Error("Invalid navigation map rotation");
+  if (typeof resolution !== "number" || !Number.isFinite(resolution) || resolution <= 0) throw new Error("Invalid navigation map resolution");
+  const width = bounded("width", 1, 240), height = bounded("height", 1, 240);
+  const height_count = bounded("height_count", 0, 128), route_count = bounded("route_count", 0, 256);
+  if (data.total_bytes !== width * height + height_count * 12 + route_count * 16) {
+    throw new Error("Invalid navigation map payload length");
+  }
+  return {
+    subscription_id: stringField("subscription_id"),
+    sequence: bounded("sequence", 0, Number.MAX_SAFE_INTEGER),
+    snapshot_sequence: bounded("snapshot_sequence", 0, Number.MAX_SAFE_INTEGER),
+    odom_reference_id: stringField("odom_reference_id"),
+    shared_frame_id: stringField("shared_frame_id"),
+    map_odom_rotation,
+    source_generation: bounded("source_generation", 0, Number.MAX_SAFE_INTEGER),
+    width, height, resolution, height_count, route_count,
+    origin: vector("origin", 2),
+    robot: vector("robot", 3),
+    target: data.target === null ? null : vector<readonly [number, number]>("target", 2),
+  };
+}
+
+export function decodeNavigationMap(header: NavigationMapHeader, bytes: Uint8Array): NavigationMapSnapshot {
+  const { height_count, route_count, ...metadata } = header;
+  const cellCount = metadata.width * metadata.height;
+  if (bytes.byteLength !== cellCount + 12 * height_count + 16 * route_count) {
+    throw new Error("Invalid navigation map payload length");
+  }
+  const wireCells = new Int8Array(bytes.buffer, bytes.byteOffset, cellCount);
+  const displayCells = new Uint8Array(cellCount);
+  for (let i = 0; i < cellCount; i++) {
+    const cost = wireCells[i];
+    if (cost < -1 || cost > 100) throw new Error("Invalid navigation map cost");
+    displayCells[i] = cost + 1;
+  }
+  const cells = Object.freeze({
+    length: cellCount,
+    costAt: (index: number) => displayCells[index] === undefined ? undefined : displayCells[index] - 1,
+    copyDisplayBytes: (destination: Uint8Array) => { destination.set(displayCells); },
+  });
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  let offset = cellCount;
+  const next = (): number => {
+    const value = view.getFloat32(offset, true);
+    offset += 4;
+    if (!Number.isFinite(value)) throw new Error("Invalid navigation map coordinate");
+    return value;
+  };
+  const heights = Array.from({ length: height_count }, () => Object.freeze([next(), next(), next()] as const));
+  const route = Array.from({ length: route_count }, () => Object.freeze([next(), next(), next(), next()] as const));
+  return Object.freeze({ ...metadata, cells, heights: Object.freeze(heights), route: Object.freeze(route) });
 }
