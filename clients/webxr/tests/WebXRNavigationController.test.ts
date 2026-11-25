@@ -20,6 +20,7 @@ const capabilities: Capabilities = {
     reason: null,
     nav_goal: { preview: false, available: true, reason: null },
     nav_joystick: { available: false, reason: "off" },
+    nav_map: { available: false, reason: "Map unavailable" },
   },
 };
 
@@ -39,7 +40,7 @@ const hello: Hello = {
   capabilities,
 };
 
-type MutableFacts<T> = T extends readonly unknown[] ? T : T extends object ? { -readonly [K in keyof T]: MutableFacts<T[K]> } : T;
+type MutableFacts<T> = T extends (...args: never[]) => unknown ? T : T extends readonly unknown[] ? T : T extends object ? { -readonly [K in keyof T]: MutableFacts<T[K]> } : T;
 function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARModuleSessionState> {
   return {
     connection: "ready",
@@ -48,6 +49,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARMod
     state: null,
     pose: null,
     nav_goal: null,
+    navigationMap: null,
     lidar: null,
     capabilities,
     nav: null,
@@ -103,6 +105,7 @@ describe("WebXRNavigationController", () => {
               reason: null,
               nav_goal: { preview: false, available: false, reason: "off" },
               nav_joystick: { available: false, reason: "off" },
+              nav_map: { available: false, reason: "Map unavailable" },
             },
           },
         }),

@@ -29,7 +29,10 @@ clients update their protocol module in the same change.
 - **`hello.capabilities`** — keys `lidar`, `navigation`, `localization`,
   `estop`, `agent`, `manipulation`, and `object_detection` are required.
   Any key may be `available=false` with `reason`. Nested
-  `navigation.nav_goal` and `navigation.nav_joystick` are always present.
+  `navigation.nav_goal`, `navigation.nav_joystick`, and `navigation.nav_map`
+  are always present. `navigation.available` describes motion availability.
+  A read-only Go2 recording can advertise `nav_map.available=true` while
+  its parent and both motion inputs report `available=false`.
 
 ## Protocol v2 control and bulk lanes
 
@@ -385,6 +388,7 @@ clients or last-client disconnect handling.
 |-------|------|-------|
 | `protocol_version` | integer | Required, exactly `2`; clients and server update together. |
 | `ts_client` | float | Client local time when the frame was sent (`ts_client`). |
+| `client_name` | string | Optional printable device label, 1–80 characters, used in the launcher connection list. WebXR reports the selected headset profile and Specs reports SPECS. |
 | `resume_token` | string | Optional 64-character token from this backend for bounded recovery; omit for a fresh connection. |
 
 The client must send exactly one JSON object in the first text frame. ARModule
@@ -421,7 +425,8 @@ connection, and replies with `hello`.
       "available": true,
       "reason": null,
       "nav_goal": { "available": true, "reason": null, "preview": false },
-      "nav_joystick": { "available": true, "reason": null }
+      "nav_joystick": { "available": true, "reason": null },
+      "nav_map": { "available": true, "reason": null }
     },
     "localization": { "available": true, "reason": null },
     "estop": { "available": true, "reason": null },
@@ -450,6 +455,7 @@ connection, and replies with `hello`.
 | `capabilities.*.reason` | string \| null | Human-readable, non-null exactly when `available` is `false`. |
 | `capabilities.navigation.nav_goal` | `{ available, reason, preview }` | Can send `nav_goal_request`. All fields are required; boolean `preview` advertises advisory planning. |
 | `capabilities.navigation.nav_joystick` | `{ available, reason }` | Can send `nav_joystick_request`. Always present. |
+| `capabilities.navigation.nav_map` | `{ available, reason }` | Can subscribe to the Go2 map independently of motion availability. Always present. |
 | `localization.providers` | `("fiducial_marker" \| "vps")[]` | Required metadata with provider inventory in canonical order: fiducial marker, then VPS. An explicit empty array means unavailable; missing metadata is invalid. |
 | `speech_transcription` | boolean (optional) | Server accepts browser audio for draft-only local dictation. Missing means unsupported. Agent capability is still required. |
 | `speech_transcription_reason` | string (optional) | At most 512 characters. Actionable installation reason when local dictation is unavailable. Clients can still use native browser recognition. |
@@ -943,6 +949,53 @@ Points are pre-filtered on ARModule by height, physical range and subsampling
 toward the robot, then projected rigidly into the shared map. Physical distances
 remain metric; clients do not rescale coordinates or sensor ranges. The bulk
 envelope carries the shared frame identity captured with this point payload.
+
+### `navigation_map` (bulk binary)
+
+Open the map with control message
+`{type:"navigation_map_request",subscription_id,sequence,enabled:true,radius_m,center?}`.
+The subscription ID is connection-scoped. A nonnegative increasing sequence
+orders viewport updates. Provide a radius in metres from 0.5 to 20. Omit center to follow the robot, or supply native
+odometry XY in metres to pan. Send `enabled:false` with the same subscription
+ID and a later sequence to close the viewport.
+
+The `bulk_binary_begin` envelope uses `kind:"navigation_map"` with standard
+`epoch`, `id` and `total_bytes`. It carries `subscription_id`, `sequence`
+(viewport sequence), `snapshot_sequence`, `odom_reference_id`,
+`source_generation`, `shared_frame_id`, `map_odom_rotation` (unit quaternion
+`[x,y,z,w]` rotating native odometry into the shared map frame), dimensions (`width`, `height`), metres-per-cell
+`resolution`, `origin:[x,y]`, `robot:[x,y,yaw]`, `target:[x,y] | null`,
+`height_count`, `route_count`, `grid_id` (64 lowercase hex characters) and
+`grid_included` (boolean). Positions are in native odometry metres, and yaw is
+in radians. Standard ARB2 chunks carry these concatenated bytes:
+
+1. When `grid_included` is true, `width * height` signed 8-bit costs in row-major order with X increasing
+   within a row and Y increasing between rows. The origin is the lower corner
+   of cell (0, 0). Cost `-1` is unknown, `0` is free and `1..100` are graded costs.
+2. `height_count` little-endian float32 `[x,y,z]` samples.
+3. `route_count` little-endian float32 `[x1,y1,x2,y2]` route segments.
+
+Dimensions are at most 240 cells each. Height and route counts are at most
+128 and 256, respectively. The payload is at most 64 KiB and the server
+tracks one replaceable pending map snapshot per subscriber. A changed
+subscription, source, or older snapshot sequence retires the old sample.
+
+After accepting a full grid, the client sends
+`{type:"navigation_map_grid_ack",subscription_id,grid_id}` on the bulk lane.
+The server sends the full grid until that identity is acknowledged. Subsequent
+frames with the same grid identity omit the cell bytes and reuse the client's
+cached immutable grid; their dynamic heights and route remain complete snapshots.
+The identity covers native frame, source generation, grid geometry and cell bytes.
+Changing a grid or subscription, reconnecting, or receiving no valid acknowledgement
+requires a full grid again. Empty dynamic frames use a zero-byte payload.
+
+A live map goal uses the standard `interaction_request` acquire and confirm
+exchange. Acquire `navigation_planning` with `source_id:"navigation-map"`,
+omitting the shared pose. With that lease, send `confirm` with normal epoch,
+lease and sequence fields plus `map_target:{position:[x,y],odom_reference_id,
+source_generation}` instead of a shared pose. This applies the normal native
+planner, capability and motion admission checks. A replay map supplies
+presentation data only.
 
 ## Inbound messages (client → server)
 
@@ -1640,11 +1693,13 @@ without commanding a return move. Selected release requires Execute for motion.
 Both clients default normal motion to 50%.
 
 Recorded playback uses `hello.source = {kind: "recording", read_only: true,
-name: <filename>}`. `state.playback` reports `{state: "playing" | "ended",
-elapsed_s, duration_s}` in seconds at 1× speed, once. At EOF the final observation
-is held; restarting the launcher run restarts playback. Recording compositions
-have no hardware or control coordinator. Navigation and agent capabilities are
-unavailable. Arm recordings still publish the visual model and observations,
+name: <filename>}`. `state.playback` reports `{state,elapsed_s,duration_s,
+source_generation}` in seconds. Playback states are `playing`, `paused`,
+`stopped`, `seeking`, `ended` and `error`. A seek or rewind retires the
+previous generation. At EOF the final observation is held. The launcher controls
+playback through the owned process's local playback socket. Recording
+compositions have no hardware or motion coordinator. Go2 recordings can
+publish a reconstructed navigation map. Arm recordings still publish the visual model and observations,
 with `manipulation_state.read_only: true`; every manipulation request is rejected
 with `code: "read_only"`. Both hosts disable arm interactions for that state.
 Recorded timestamps are rebased to server time for observation freshness.

@@ -83,7 +83,19 @@ test("comparable hand golden path", async ({ page }, info) => {
   test.setTimeout(180000);
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
-  const runtime = await bootstrap(page, "hand", { manipulation: true });
+  const runtime = await bootstrap(page, "hand", { manipulation: true, navigationMap: "live" });
+  await page.evaluate(() => {
+    const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
+    const session = app.session as XRSession, dispatch = session.dispatchEvent.bind(session);
+    session.dispatchEvent = (event: Event) => {
+      if (event.type === "select") return true;
+      if (event.type === "selectend") {
+        const { frame, inputSource } = event as XRInputSourceEvent;
+        dispatch(new w.IWER.XRInputSourceEvent("select", { frame, inputSource }));
+      }
+      return dispatch(event);
+    };
+  });
   const root = process.env.INTEGRATION_RESULTS_DIR ?? info.outputDir;
   const flow = new Flow(page, join(root, "golden"));
   const armValue = (expression: string) => appValue(page, `app.client.manipulation.${expression}`);
@@ -137,6 +149,76 @@ test("comparable hand golden path", async ({ page }, info) => {
     await flow.step("navigation_success", async () => runtime.state("resolved", "succeeded"),
       async () => await appValue(page, "app.client.navigation.flash() === 'succeeded'"), { screenshotOffsetS: 0.38 });
     await summonMenu(page);
+    await frameMenu(page, true);
+    await flow.step("map_open", async () => {
+      await expect.poll(() => runtime.commands.some(c => c.type === "navigation_map_request" && c.enabled)).toBe(true);
+      await appValue(page, "app.inputController.panels.detachAnchor()");
+      await page.evaluate(() => {
+        const w = window as any, face = w.xb.core.scene.getObjectByName("Navigation map face");
+        const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
+        const center = face.getWorldPosition(face.position.clone());
+        const facing = center.clone().set(0, 0, 1).applyQuaternion(app.mainMenu.panel.getWorldQuaternion(face.quaternion.clone()));
+        facing.y = 0; facing.normalize();
+        const eye = center.clone().addScaledVector(facing, 0.30).add(center.clone().set(0, 0.38, 0));
+        const direction = center.clone().sub(eye).normalize();
+        const rotation = face.quaternion.clone().setFromUnitVectors(center.clone().set(0, 0, -1), direction);
+        const panelUp = center.clone().set(0, 1, 0).applyQuaternion(app.mainMenu.panel.getWorldQuaternion(face.quaternion.clone()));
+        panelUp.addScaledVector(direction, -panelUp.dot(direction)).normalize();
+        const cameraUp = center.clone().set(0, 1, 0).applyQuaternion(rotation);
+        const roll = Math.atan2(direction.dot(cameraUp.clone().cross(panelUp)), cameraUp.dot(panelUp));
+        rotation.premultiply(face.quaternion.clone().setFromAxisAngle(direction, roll));
+        w.questDevice.position.set(eye.x, eye.y, eye.z);
+        w.questDevice.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+      });
+    }, async () => await appValue(page, "w.xb.core.scene.getObjectByName('Go2 navigation map')?.visible === true && !!app.client.session.view().navigationMap"));
+    await flow.step("map_pan_zoom", async () => {
+      // Keep the opened panel in place while the left hand joins the map gesture.
+      await appValue(page, "app.inputController.panels.detachAnchor()");
+      await page.waitForTimeout(1000);
+      await page.evaluate(() => {
+        const w = window as any, face = w.xb.core.scene.getObjectByName("Navigation map face");
+        for (const [hand, x] of [["left", -0.45], ["right", 0.45]] as const) {
+          const point = face.localToWorld(face.position.clone().set(x, hand === "left" ? -0.4 : 0.25, 0));
+          const origin = point.clone().add(point.clone().set(0, 0.10, 0));
+          const rotation = face.quaternion.clone().setFromUnitVectors(point.clone().set(0, 0, -1), point.clone().sub(origin).normalize());
+          const input = w.questDevice.hands[hand]; input.position.set(origin.x, origin.y, origin.z);
+          input.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+        }
+      });
+      const frame = () => page.evaluate(async () => { const s = (window as any).xb.core.renderer.xr.getSession(); await new Promise<void>(r => s.requestAnimationFrame(() => s.requestAnimationFrame(() => r()))); });
+      await expect.poll(() => appValue(page, "app.interaction.hit(w.xb.core.input.controllers.find((c) => c.inputSource?.handedness === 'right'))?.object.name")).toBe("Navigation map face");
+      await frame(); await page.evaluate(() => (window as any).questDevice.hands.right.updatePinchValue(1));
+      await expect.poll(() => appValue(page, "!!app.inputController.map.gesture")).toBe(true);
+      await page.waitForTimeout(250); await moveInput(page, [0.08, 0, 0], 600);
+      await expect.poll(() => appValue(page, "app.inputController.map.viewport.followingRobot")).toBe(false);
+      await page.evaluate(() => {
+        const w = window as any, face = w.xb.core.scene.getObjectByName("Navigation map face");
+        const point = face.localToWorld(face.position.clone().set(-0.45, -0.4, 0));
+        const origin = point.clone().add(point.clone().set(0, 0.10, 0));
+        const rotation = face.quaternion.clone().setFromUnitVectors(point.clone().set(0, 0, -1), point.clone().sub(origin).normalize());
+        const hand = w.questDevice.hands.left; hand.position.set(origin.x, origin.y, origin.z);
+        hand.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+      });
+      await expect.poll(() => appValue(page, "app.interaction.hit(w.xb.core.input.controllers.find((c) => c.inputSource?.handedness === 'left'))?.object.name")).toBe("Navigation map face");
+      await frame(); await page.evaluate(() => (window as any).questDevice.hands.left.updatePinchValue(1));
+      await expect.poll(() => appValue(page, "!!app.inputController.mapSecondHand")).toBe(true);
+      const before = await appValue(page, "app.inputController.map.mapRadius");
+      await page.evaluate(() => { (window as any).questDevice.hands.left.position.x -= 0.08; });
+      await expect.poll(() => appValue(page, "app.inputController.map.mapRadius")).toBeLessThan(before);
+      await page.evaluate(() => { (window as any).questDevice.hands.left.updatePinchValue(0); (window as any).questDevice.hands.right.updatePinchValue(0); });
+      await frame();
+    }, async () => await appValue(page, "!app.inputController.mapSecondHand"));
+    await flow.step("map_goal", async () => {
+      await page.evaluate(() => {
+        const w = window as any, face = w.xb.core.scene.getObjectByName("Navigation map face");
+        const point = face.localToWorld(face.position.clone().set(-0.65, 0, 0));
+        const origin = point.clone().add(point.clone().set(0, 0.10, 0));
+        const rotation = face.quaternion.clone().setFromUnitVectors(point.clone().set(0, 0, -1), point.clone().sub(origin).normalize());
+        const hand = w.questDevice.hands.right; hand.position.set(origin.x, origin.y, origin.z); hand.quaternion.set(rotation.x, rotation.y, rotation.z, rotation.w);
+      });
+      await expect.poll(() => appValue(page, "app.interaction.hit(w.xb.core.input.controllers.find((c) => c.inputSource?.handedness === 'right'))?.object.name")).toBe("Navigation map face");
+      await setSelection(page, 1); await setSelection(page, 0);
+    }, async () => runtime.commands.some(c => c.action === "confirm" && !!c.map_target));
     await frameMenu(page, true);
     await flow.step("agent_response", async () => {
       await touchButton(page, "Agent");

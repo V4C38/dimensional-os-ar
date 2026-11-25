@@ -8,12 +8,12 @@ passing assertion with its exact ID and a captured image. Unsupported platform
 features are listed explicitly as not applicable; missing implementations fail.
 
 Run WebXR from `clients/webxr` with `npm run test:integration`. It runs only the
-compact hand golden path (setup, navigation, agent, LiDAR and manipulation) and
+compact hand golden path (setup, navigation, map interactions, agent, LiDAR and manipulation) and
 short controller walkthrough, then validates their media
 and coverage. Detailed behavior remains covered by backend and client unit tests.
 The native Specs command and Lens Studio prerequisites are described in
 `clients/specs/tools/README.md`. Native runs use Lens Studio 5.15 CLAD, disposable
-project copies, actual SUK/SIK controls and source-project restoration.
+the production project by default in the documented workflow, actual SUK/SIK controls and source-project restoration.
 
 Outputs are ignored and live under:
 
@@ -43,8 +43,8 @@ stable repository-root path. Older client-prefixed golden export spellings are
 removed only after a new successful publication; unrelated files remain.
 
 Each completed full run contains consecutively numbered `01_setup_entry.png` style
-images, `golden-path.mp4` (WebXR targets one minute within 45–75 seconds;
-native Specs uses 16 chapters with 87 seconds of declared holds within 75–105), `results.json`, and diagnostics. Both golden paths include one brief re-localization. The
+images, `golden-path.mp4` (WebXR runs within 45–95 seconds;
+native Specs uses 19 chapters within 75–125 seconds), `results.json`, and diagnostics. Both golden paths include one brief re-localization and map interactions. The
 canonical golden video is produced by default for both clients. Set
 `INTEGRATION_EXTRA_MEDIA=1` for WebXR or pass native `--extra-media` to also encode
 controller/probe and supplemental edited clips. Functional tests and failure

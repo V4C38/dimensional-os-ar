@@ -229,6 +229,30 @@ it("activates a nearby button once through SDK pinch/trigger events while the la
   expect(activate).toHaveBeenCalledOnce(); interaction.dispose();
 });
 
+it("keeps a captured laser visible when the grabbed target stops being hover eligible", () => {
+  const f = fixture();
+  const interaction = new XRBlocksRayInteraction(f.input);
+  registerRayTarget(f.button.mesh!);
+  f.button.position.z = -1;
+  f.controller.inputSource = { targetRayMode: "tracked-pointer" };
+  f.controller.userData.connected = true;
+  interaction.setEnabled(true);
+  f.scene.updateMatrixWorld(true);
+  f.input.updateController(f.controller);
+  const hit = interaction.hit(f.controller)!;
+  interaction.capture(f.controller, hit.object, hit.point);
+  interaction.setPolicy({ eligible: () => false, captured: () => false, unobstructed: () => true });
+  for (let i = 0; i < 60; i++) interaction.update(1 / 60);
+  const beam = interaction.beams.get(f.controller)!;
+  expect(beam.mesh.visible).toBe(true);
+  expect(beam.mesh.material.uniforms.uOpacity.value).toBeCloseTo(1);
+  expect(beam.tip.distanceTo(hit.point)).toBeLessThan(1e-6);
+  interaction.releaseCapture(f.controller);
+  interaction.update(1);
+  expect(beam.mesh.visible).toBe(false);
+  interaction.dispose();
+});
+
 it("keeps the captured laser endpoint on a moving local contact despite ray jitter", () => {
   const f = fixture();
   const interaction = new XRBlocksRayInteraction(f.input);

@@ -8,6 +8,9 @@ import { WristMenuController } from "../Scripts/DimOSSpecsClient/presentation/Wr
 import { IntegrationArmGolden } from "./IntegrationArmGolden";
 import { INTEGRATION_CATALOG as CATALOG } from "./IntegrationCatalog";
 import type { ReviewScenario } from "./IntegrationScenario";
+import { IntegrationInput } from "./IntegrationInput";
+import { InteractorInputType, InteractorTriggerType, TargetingMode } from "SpectaclesInteractionKit.lspkg/Core/Interactor/Interactor";
+import { Interactable } from "SpectaclesInteractionKit.lspkg/Components/Interaction/Interactable/Interactable";
 
 /** Case actions share the scenario's fixture, scheduler and assertion owner. */
 export function runGoldenCase(scenario: ReviewScenario, id: string): void {
@@ -18,7 +21,7 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
       root.session.stop();
       const yes = { available: true, reason: null }, no = { available: false, reason: "Stationary arm" };
       scenario.caps = { ...scenario.caps, manipulation: yes, agent: no, lidar: no,
-        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no } };
+        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no, nav_map: { available: false, reason: "Map unavailable" } } };
       scenario.ready(scenario.caps); scenario.runtime(); scenario.worldOnly();
       scenario.worldCamera = false; // Arm framing is owned by the golden helper until completion.
       scenario.armGolden = new IntegrationArmGolden(root, scenario.peer, scenario.input!,
@@ -29,6 +32,38 @@ export function runGoldenCase(scenario: ReviewScenario, id: string): void {
     return;
   }
   switch (id) {
+    case "map_open":
+      scenario.showMenu();
+      scenario.setWorldCamera(true);
+      scenario.later(1, () => !!scenario.mapRequest && !!root.session.view().navigationMap && ui.navigationMapView?.root.enabled);
+      break;
+    case "map_pan_zoom": {
+      const view = ui.navigationMapView, input = ui.navigationMapInput;
+      const target = input.targets[0].object.getComponent(Interactable.getTypeName()) as Interactable;
+      const left = new IntegrationInput(InteractorInputType.LeftHand), right = new IntegrationInput(InteractorInputType.RightHand);
+      scenario.mapHands = [left, right]; scenario.input!.active = false;
+      const point = (x: number) => view.dataRoot.getTransform().getWorldTransform().multiplyPoint(new vec3(x, 0, 0));
+      const aim = (hand: IntegrationInput, x: number) => { const p = point(x); hand.ray(p.add(new vec3(0, 20, 0)), p, target); };
+      const before = ui.navigationMap.gesture.viewport.radiusM;
+      aim(left, -3); aim(right, 3); left.hover(target); right.hover(target);
+      scenario.after(.2, () => left.start(target)); scenario.after(.5, () => aim(left, -6));
+      scenario.after(.8, () => right.start(target));
+      scenario.after(1.1, () => { aim(left, -8); aim(right, 6); });
+      scenario.after(1.5, () => { left.end(); right.end(); });
+      scenario.later(1.8, () => !ui.navigationMap.gesture.viewport.followingRobot && ui.navigationMap.gesture.viewport.radiusM < before && !scenario.mapGoal);
+      break;
+    }
+    case "map_goal": {
+      const view = ui.navigationMapView, input = ui.navigationMapInput, hand = scenario.mapHands[0];
+      const target = input.targets[0].object.getComponent(Interactable.getTypeName()) as Interactable;
+      const point = view.dataRoot.getTransform().getWorldTransform().multiplyPoint(new vec3(-4, 0, 0));
+      hand.triggerType = InteractorTriggerType.Poke; hand.targetingMode = TargetingMode.Poke;
+      hand.ray(point.add(new vec3(0, 20, 0)), point, target); hand.hover(target);
+      scenario.after(.2, () => hand.start(target)); scenario.after(.3, () => hand.end());
+      scenario.later(1.5, () => !!scenario.mapGoal && scenario.sent.some(row => row.action === "confirm" && !!row.map_target));
+      scenario.after(2, () => { scenario.mapHands.forEach(value => value.restore()); scenario.mapHands = []; });
+      break;
+    }
     case "setup_entry":
       scenario.headerMetrics();
       scenario.check(id, controller.isVisible() && controller.flow.step === "connect" && !controller.view.previous.sceneObject.enabled &&

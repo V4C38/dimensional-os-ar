@@ -201,23 +201,52 @@ class NavGoalCoordinator:
                 return NavState(state="following_path", outcome=None)
             return NavState(state="idle", outcome=None)
 
-    def submit_goal(self, msg: NavGoalRequest) -> PoseStamped:
+    def native_geometry(self) -> tuple[
+        tuple[float, float] | None, tuple[tuple[float, float], ...]
+    ]:
+        with self._lock:
+            path = tuple((pose[0], pose[1]) for pose in self._native_path.poses) if self._native_path else ()
+            goal = self._native_goal_pose
+            return (path[-1] if path else (goal[0], goal[1]) if goal else None), path
+
+    def prepare_shared_goal(self, msg: NavGoalRequest) -> PoseStamped:
         snapshot = self._frames()
         position, orientation = transform_pose(
             snapshot.T_odom_map, msg.position, msg.orientation
         )
         # Freeze the native target at admission. Later map corrections only
         # change its presentation, never its identity or native execution.
-        goal = PoseStamped(
+        return PoseStamped(
             ts=time.time(), frame_id="odom", position=position, orientation=orientation
         )
+
+    def submit_goal(self, msg: NavGoalRequest) -> PoseStamped:
+        goal = self.prepare_shared_goal(msg)
+        self.accept_goal(goal)
+        return goal
+
+    def prepare_map_goal(self, xy: tuple[float, float]) -> tuple[PoseStamped, NavGoalRequest]:
+        native_position = (*xy, 0.0)
+        native_orientation = (0.0, 0.0, 0.0, 1.0)
+        position, orientation = transform_pose(
+            self._frames().T_map_odom, native_position, native_orientation
+        )
+        return (
+            PoseStamped(ts=time.time(), frame_id="odom", position=native_position,
+                        orientation=native_orientation),
+            NavGoalRequest(position, orientation),
+        )
+
+    def accept_goal(self, goal: PoseStamped) -> None:
         with self._lock:
             self._outcome = None
             self._retired_at = time.time()
             self._requested_goal_ts = float(goal.ts)
             self._native_path = None
-            self._native_goal_pose = (*position, *orientation)
-        return goal
+            self._native_goal_pose = (
+                goal.x, goal.y, goal.z, goal.orientation.x, goal.orientation.y,
+                goal.orientation.z, goal.orientation.w,
+            )
 
     def on_path(self, msg: Path) -> tuple[NavGoalFrame | None, bool]:
         snapshot = self._frames()

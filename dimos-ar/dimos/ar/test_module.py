@@ -224,6 +224,21 @@ def test_hello_lidar_nav_estop_follow_profile() -> None:
     assert hello.capabilities[CapabilityName.LOCALIZATION].available is True
 
 
+
+def test_go2_recording_can_advertise_map_without_motion() -> None:
+    profile = replace(
+        UNITREE_GO2_PROFILE,
+        supported_capabilities=frozenset(),
+        supported_navigation_inputs=frozenset(),
+    )
+    module = _module_with_localization([], profile=profile)
+    module._recording_source = True
+    hello = module._hello_body("recording")
+    assert hello.nav_map.available
+    assert not hello.capabilities[CapabilityName.NAVIGATION].available
+    assert not hello.navigation_inputs[NAV_GOAL].available
+    assert not hello.navigation_inputs[NAV_JOYSTICK].available
+
 def test_hello_anvil_openyam_profile_has_no_mobile_capabilities() -> None:
     module = _module_with_localization([], profile=_anvil_openyam_profile())
     hello = module._hello_body("c1")
@@ -1004,12 +1019,13 @@ async def test_disconnect_cancels_preview_delivery_while_worker_finishes() -> No
         release.set()
 
 
-def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None:
+def test_new_goal_broadcasts_cleared_state_after_admission() -> None:
     module = _module_with_localization([])
     order: list[str] = []
     module._nav_goal_coordinator = SimpleNamespace(
         nav_state=lambda: NavState("idle", None),
-        submit_goal=lambda _msg: object(),
+        prepare_shared_goal=lambda _msg: PoseStamped(),
+        accept_goal=lambda _goal: None,
     )
     module._broadcast_state = lambda: order.append("state")  # type: ignore[method-assign]
     module.goal_request = SimpleNamespace(
@@ -1022,7 +1038,7 @@ def test_new_goal_broadcasts_cleared_state_before_planner_can_complete() -> None
         None,  # type: ignore[arg-type]
         "c1",
     )
-    assert order == ["state", "planner"]
+    assert order == ["planner", "state"]
 
 
 async def test_changed_robot_frame_retires_origins_and_keeps_navigation_available() -> None:
@@ -1050,7 +1066,8 @@ async def test_changed_robot_frame_retires_origins_and_keeps_navigation_availabl
     hello = module._hello_body("client")
     assert hello.capabilities[CapabilityName.NAVIGATION].available
     assert hello.navigation_inputs[NAV_GOAL].available
-    module._nav_goal_coordinator.submit_goal = Mock(return_value=object())
+    module._nav_goal_coordinator.prepare_shared_goal = Mock(return_value=PoseStamped())
+    module._nav_goal_coordinator.accept_goal = Mock()
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
     module._on_nav_goal_request(
         _authorized_request(module, NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), "client"),
@@ -1077,7 +1094,8 @@ async def test_live_go2_long_outage_recovers_navigation_on_fresh_odometry(
     module._robot_observations = Mock()
     module._tele_cmd_vel_publisher = Mock()
     module.stop_movement = SimpleNamespace(transport=object(), publish=Mock())
-    module._nav_goal_coordinator.submit_goal = Mock(return_value=object())
+    module._nav_goal_coordinator.prepare_shared_goal = Mock(return_value=PoseStamped())
+    module._nav_goal_coordinator.accept_goal = Mock()
     module.goal_request = SimpleNamespace(transport=object(), publish=Mock())
 
     await module.handle_odom(PoseStamped(ts=time.time(), frame_id="world", position=[1, 0, 0]))
@@ -1171,13 +1189,13 @@ async def test_duplicate_odometry_has_no_telemetry_or_localization_effects() -> 
 def test_unwired_goal_does_not_mutate_navigation() -> None:
     module = _module_with_localization([])
     module._navigation_service = None
-    module._nav_goal_coordinator.submit_goal = Mock()
+    module._nav_goal_coordinator.prepare_shared_goal = Mock()
     module._on_nav_goal_request(
         _authorized_request(module, NavGoalRequest((1, 0, 0), (0, 0, 0, 1)), "client"),
         None,
         "client",
     )
-    module._nav_goal_coordinator.submit_goal.assert_not_called()
+    module._nav_goal_coordinator.prepare_shared_goal.assert_not_called()
     assert module._ws_server.broadcasts == []
 
 
@@ -1372,6 +1390,6 @@ def test_navigation_recovery_blocks_both_goal_state_and_joystick_motion(blocked)
     module._tele_cmd_vel_publisher.handle.assert_not_called()
     module.tele_cmd_vel.publish.assert_not_called()
     assert not module._submit_navigation_goal(NavGoalRequest((1, 2, 0), (0, 0, 0, 1)))
-    module._nav_goal_coordinator.submit_goal.assert_not_called()
+    module._nav_goal_coordinator.prepare_shared_goal.assert_not_called()
     module._broadcast_state.assert_not_called()
     assert module._interaction_controller.state.active_goal is None

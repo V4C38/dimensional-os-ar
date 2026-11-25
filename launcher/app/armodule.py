@@ -14,6 +14,7 @@ import shutil
 import signal
 import socket
 import sys
+import tempfile
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
@@ -36,6 +37,7 @@ from dimos_config import write_runtime_config
 from discovery import run_json_probe
 from launcher_events import LauncherEvents
 from owned_operation import OwnedOperation
+from playback import PLAYBACK_SOCKET_ENV, PlaybackAction, PlaybackSession, PlaybackStatus
 from process_groups import ProcessGroups, start_owned_process
 from robot_sources import BLUEPRINT_CLI, blueprint_definition
 
@@ -293,6 +295,8 @@ class RuntimePorts(Protocol):
 
     def publish_connections(self, rows: tuple[dict[str, str | int], ...]) -> None: ...
 
+    def publish_playback(self, status: PlaybackStatus | None) -> None: ...
+
     @property
     def status(self) -> LauncherStatus: ...
 
@@ -438,6 +442,9 @@ class ProcessManager:
     def publish_connections(self, rows: tuple[dict[str, str | int], ...]) -> None:
         self._emit({"type": "connections", "connections": rows})
 
+    def publish_playback(self, status: PlaybackStatus | None) -> None:
+        self._emit({"type": "playback", "playback": status})
+
     @property
     def runtime_running(self) -> bool:
         webxr_start = self.runtime.pending_webxr_start
@@ -492,6 +499,7 @@ class ProcessManager:
         return {
             "phase": status.phase.value,
             "connections": self.runtime.facts.connections,
+            "playback": self.runtime.playback_status,
             "check_ok": status.check_ok,
             "dimos_python": status.dimos_python,
             "dimos_install_dir": dimos_install_dir,
@@ -808,7 +816,7 @@ class ProcessManager:
     async def _build_webxr(self, env: dict[str, str]) -> None:
         self._append_log("Building optimized WebXR client…")
         await self._run_webxr_command(
-            ["npm", "run", "build"],
+            ["npm", "run", "build", "--", "--outDir", env["DIMOS_WEBXR_RUN_DIST"]],
             "WebXR build",
             "WebXR production build failed; see launcher logs",
             env=env,
@@ -992,6 +1000,9 @@ class ProcessSession:
     process: asyncio.subprocess.Process | None = None
     reader: asyncio.Task[None] | None = None
     config_path: Path | None = None
+    playback: PlaybackSession | None = None
+    webxr_dist: tempfile.TemporaryDirectory[str] | None = None
+    paired_backend: asyncio.subprocess.Process | None = None
     ready: asyncio.Event = field(default_factory=asyncio.Event)
     listener_ready: bool = False
     manipulation_ready: bool = False
@@ -1023,6 +1034,49 @@ class RuntimeProcesses:
             )
         self.facts = replace(self.facts, **cast(RuntimeFields, changes))
         self.host.publish_status()
+
+    @property
+    def playback_status(self) -> PlaybackStatus | None:
+        playback = self.backend.playback
+        return playback.status if playback is not None else None
+
+    async def playback_command(
+        self, session_id: str, action: PlaybackAction, elapsed_s: float | None = None
+    ) -> PlaybackStatus:
+        backend = self.backend
+        playback = backend.playback
+        if playback is None or playback.id != session_id:
+            raise RuntimeError("Recording playback session changed")
+        async with playback.lock:
+            if not self._playback_current(backend, playback):
+                raise RuntimeError("Recording playback session changed")
+            status = await playback.request(action, elapsed_s)
+            if not self._playback_current(backend, playback):
+                raise RuntimeError("Recording playback session changed")
+            if status != playback.status:
+                playback.status = status
+                self.host.publish_playback(status)
+            return status
+
+    def _playback_current(self, backend: ProcessSession, playback: PlaybackSession) -> bool:
+        return (
+            self.backend is backend
+            and backend.playback is playback
+            and backend.process is not None
+            and backend.process.returncode is None
+            and self.host.status.phase != Phase.STOPPING
+        )
+
+    async def _poll_playback(self, backend: ProcessSession, playback: PlaybackSession) -> None:
+        while self._playback_current(backend, playback):
+            try:
+                await self.playback_command(playback.id, "status")
+            except (OSError, TimeoutError, RuntimeError, TypeError, ValueError):
+                # The child may still be starting or its socket may be closing.
+                if self._playback_current(backend, playback) and playback.status is not None:
+                    playback.status = None
+                    self.host.publish_playback(None)
+            await asyncio.sleep(0.25)
 
     def _update_connections(self, rows: tuple[dict[str, str], ...]) -> None:
         def identity(row: dict[str, str | int]) -> tuple[str | int | None, ...]:
@@ -1160,6 +1214,8 @@ class RuntimeProcesses:
             "--port",
             str(WEBXR_PORT),
             "--strictPort",
+            "--outDir",
+            env["DIMOS_WEBXR_RUN_DIST"],
         ]
         self.host._append_log(f"$ {' '.join(argv)}")
 
@@ -1248,6 +1304,7 @@ class RuntimeProcesses:
                 "DIMOS_AR_SIMULATION",
                 "ROBOT_IPS",
                 "DIMOS_AR_REPLAY_STREAMS",
+                PLAYBACK_SOCKET_ENV,
             ):
                 env.pop(key, None)
             if can_port:
@@ -1299,7 +1356,13 @@ class RuntimeProcesses:
                 self.host._append_log(warning)
             self.host._append_log(f"$ {' '.join(argv)}")
             try:
+                if replay or (pinned_ip == "simulated" and not blueprint_definition(blueprint).manipulation):
+                    self.backend.playback = PlaybackSession()
+                    env[PLAYBACK_SOCKET_ENV] = str(self.backend.playback.path)
                 await self._spawn(argv, env=env)
+                playback = self.backend.playback
+                if playback is not None:
+                    playback.poller = asyncio.create_task(self._poll_playback(self.backend, playback))
             except BaseException as exc:
                 if self.backend.process is not None:
                     await self._stop_backend_unlocked()
@@ -1359,14 +1422,21 @@ class RuntimeProcesses:
                 raise RuntimeError("WebXR is already running or starting")
             if self.host.dependency_running or self.host.can_setup_running:
                 raise RuntimeError("Wait for DimOS setup to finish before starting WebXR")
+            paired_backend = self.backend.process if scheduled else None
             self.pending_webxr_start = asyncio.current_task()
             self.update_status(webxr_phase="starting", webxr_error=None)
-        webxr_env = env if env is not None else self._webxr_environment()
+        webxr_env = dict(env) if env is not None else self._webxr_environment()
+        dist = tempfile.TemporaryDirectory(prefix="dimos-webxr-")
+        webxr_env["DIMOS_WEBXR_RUN_DIST"] = dist.name
         try:
             await self.host._ensure_webxr_deps(webxr_env)
             await self.host._build_webxr(webxr_env)
             async with self.host._lock:
+                if paired_backend is not None and self.backend.process is not paired_backend:
+                    raise RuntimeError("ARModule changed during the WebXR build")
                 await self._spawn_webxr(webxr_env)
+                self.webxr.webxr_dist = dist
+                self.webxr.paired_backend = paired_backend
         except asyncio.CancelledError:
             if self.pending_webxr_start is asyncio.current_task():
                 self.update_status(
@@ -1387,6 +1457,8 @@ class RuntimeProcesses:
             if not scheduled:
                 raise
         finally:
+            if self.webxr.webxr_dist is not dist:
+                dist.cleanup()
             if self.pending_webxr_start is asyncio.current_task():
                 self.pending_webxr_start = None
 
@@ -1396,6 +1468,10 @@ class RuntimeProcesses:
         await self._cancel_task(task)
         stopped = await self._stop_one(proc, "WebXR")
         self.webxr.process = None
+        self.webxr.paired_backend = None
+        if self.webxr.webxr_dist is not None:
+            self.webxr.webxr_dist.cleanup()
+            self.webxr.webxr_dist = None
         await self._cancel_task(self.webxr.reader)
         self.webxr.reader = None
         self.update_status(
@@ -1421,6 +1497,10 @@ class RuntimeProcesses:
             )
 
     def _clear_run_config(self) -> None:
+        playback, self.backend.playback = self.backend.playback, None
+        if playback is not None:
+            playback.close()
+            self.host.publish_playback(None)
         if self.backend.config_path is not None:
             self.backend.config_path.unlink(missing_ok=True)
             self.backend.config_path = None
@@ -1434,6 +1514,8 @@ class RuntimeProcesses:
         ):
             task, self.pending_webxr_start = self.pending_webxr_start, None
             await self._cancel_task(task)
+        if proc is not None and self.webxr.paired_backend is proc:
+            await self._stop_webxr_unlocked()
         stopped = await self._stop_one(proc, "ARModule")
         self.backend.process = None
         self._clear_run_config()
@@ -1562,6 +1644,10 @@ class RuntimeProcesses:
             if self.webxr.process is proc:
                 await self._stop_one(proc, "WebXR")
                 self.webxr.process = None
+                self.webxr.paired_backend = None
+                if self.webxr.webxr_dist is not None:
+                    self.webxr.webxr_dist.cleanup()
+                    self.webxr.webxr_dist = None
                 self.webxr.reader = None
                 self.host._append_log("WebXR exited; ARModule remains available")
                 self.update_status(

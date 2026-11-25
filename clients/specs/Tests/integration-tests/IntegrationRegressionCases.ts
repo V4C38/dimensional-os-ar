@@ -73,7 +73,7 @@ export function runRegressionCase(scenario: ReviewScenario, id: string): void {
     case "capabilities_unavailable": {
       root.session.stop();
       scenario.ready(Object.fromEntries(Object.entries(scenario.caps).map(([key, value]) => [key,
-        key === "navigation" ? { available: false, reason: "Fixture unavailable", nav_goal: { preview: false, available: false, reason: "Fixture unavailable" }, nav_joystick: { available: false, reason: "Hand only" } } : { available: false, reason: "Fixture unavailable" }])));
+        key === "navigation" ? { available: false, reason: "Fixture unavailable", nav_goal: { preview: false, available: false, reason: "Fixture unavailable" }, nav_joystick: { available: false, reason: "Hand only" }, nav_map: { available: false, reason: "Map unavailable" } } : { available: false, reason: "Fixture unavailable" }])));
       scenario.runtime();
       const before = scenario.sent.length;
       scenario.after(0.5, () => { scenario.press(menu.modeButtons[1]); scenario.press(menu.stop); scenario.press(menu.lidarButtons[2]); });
@@ -214,8 +214,8 @@ export function runRegressionCase(scenario: ReviewScenario, id: string): void {
       scenario.after(.6, () => scenario.press(menu.lidarButtons[0]));
       scenario.after(.8, () => { off = ui.getLidarMode() === "off"; scenario.press(menu.lidarButtons[2]); });
       for (let i = 0; i < 24; i++) {
-        scenario.after(1 + i * .05, () => scenario.press(scenario.button("Sensor-1:-1")));
-        scenario.after(2.5 + i * .05, () => scenario.press(scenario.button("Sensor-1:1")));
+        scenario.after(1 + i * .05, () => scenario.press(menu.sensorControls[2]));
+        scenario.after(2.5 + i * .05, () => scenario.press(menu.sensorControls[3]));
       }
       scenario.after(2.3, () => { low = ui.getLidarPreferences().pointLimit === 250; });
       scenario.after(3.8, () => { high = ui.getLidarPreferences().pointLimit === 4000; });

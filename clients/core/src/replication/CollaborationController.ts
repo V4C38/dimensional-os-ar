@@ -1,4 +1,4 @@
-import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget, InteractionSnapshot, InteractionDomain, ReadonlyFacts } from "../ClientContracts";
+import type { InteractionCredentials, InteractionKind, InteractionPose, InteractionResult, InteractionState, InteractionSettings, InteractionTarget, InteractionSnapshot, InteractionDomain, NavigationMapTarget, ReadonlyFacts } from "../ClientContracts";
 
 import { composePose, lerpVec3, slerpQuat, poseCoordinatesEqual, type ReadonlyPose } from "../localization/ClientTracking";
 
@@ -51,6 +51,14 @@ export class CollaborationController {
   private readonly cancelled = new Set<string>();
   private denial = 0;
   private settling: SettlingTarget | null = null;
+  private mapGoal: {
+    acquisitionId: string;
+    epoch: string;
+    target: NavigationMapTarget;
+    confirmId: string | null;
+    deadline: number;
+    finish(error?: Error): void;
+  } | null = null;
   constructor(private readonly port: CollaborationPort) {}
 
   raw(): ReadonlyFacts<InteractionState> | null { return this.state; }
@@ -79,7 +87,7 @@ export class CollaborationController {
     const ownsAuthority = this.owns() && sameScope;
     const foreignAuthority = !!authority && (authority.client_id !== this.port.clientId() || !sameScope);
     const blocked = this.state?.mode === "agent" || this.state?.motion_busy === true ||
-      foreignAuthority || !!local && !predicting;
+      foreignAuthority || this.mapGoal !== null || !!local && !predicting;
     const settling = this.settling?.key === key ? this.settling : null;
     let target: InteractionPose | null;
     if (settling) target = clone(settling.pose);
@@ -163,6 +171,13 @@ export class CollaborationController {
     }
   }
   accept(result: InteractionResult): void {
+    const map = this.mapGoal;
+    if (map && result.request_id === map.confirmId) {
+      this.mapGoal = null;
+      map.finish(result.status === "accepted" && result.epoch === map.epoch ? undefined :
+        new Error(`Navigation map goal rejected: ${result.code}`));
+      return;
+    }
     if (this.cancelled.delete(result.request_id)) {
       if (result.status === "accepted" && result.lease_id) {
         this.send({ action: "cancel", epoch: result.epoch, lease_id: result.lease_id });
@@ -199,10 +214,51 @@ export class CollaborationController {
     }
     local.lease = result.lease_id;
     local.grantRevision = result.revision;
+    if (map?.acquisitionId === local.acquisitionId) {
+      map.confirmId = this.id();
+      try {
+        this.send({ request_id: map.confirmId, action: "confirm", lease_id: local.lease,
+          sequence: ++local.sequence, map_target: map.target });
+      } catch (error) {
+        this.mapGoal = null;
+        map.finish(new Error(String(error)));
+      }
+      this.clearLocal();
+      return;
+    }
     if (local.deferred) {
       local.deferred.grantRevision = result.revision;
       this.finishDeferred();
     } else this.flush(true);
+  }
+  submitNavigationMapGoal(target: NavigationMapTarget): Promise<void> {
+    if (!this.state || this.local || this.mapGoal || this.state.authority) {
+      return Promise.reject(new Error("Navigation authority is busy"));
+    }
+    const epoch = this.state.epoch;
+    return new Promise<void>((resolve, reject) => {
+      if (!this.begin("navigation_planning", "navigation-map")) {
+        reject(new Error("Navigation authority is unavailable"));
+        return;
+      }
+      this.mapGoal = {
+        acquisitionId: this.local!.acquisitionId, epoch, target, confirmId: null,
+        deadline: this.port.now() + 5,
+        finish: error => error ? reject(error) : resolve(),
+      };
+    });
+  }
+  cancelPendingNavigationMapGoal(includeSubmitted = false, reason = "Navigation map goal retired", sendCancellation = true): void {
+    const map = this.mapGoal;
+    if (!map || (map.confirmId && !includeSubmitted)) return;
+    this.mapGoal = null;
+    map.finish(new Error(reason));
+    if (this.local?.acquisitionId !== map.acquisitionId) return;
+    if (sendCancellation) this.cancel();
+    else this.clearLocal();
+  }
+  private ownsMapAcquisition(): boolean {
+    return !!this.local && this.local.acquisitionId === this.mapGoal?.acquisitionId;
   }
   begin(kind: InteractionKind, sourceId: string, pose?: ReadonlyPose, settings: InteractionSettings = {}, takeover = false): boolean {
     const snapshot = this.snapshot(interactionDomain(kind), settings.group_id);
@@ -224,7 +280,7 @@ export class CollaborationController {
   }
   update(pose: ReadonlyPose, settings?: InteractionSettings): void {
     const local = this.local;
-    if (!local) return;
+    if (!local || this.ownsMapAcquisition()) return;
     const merged = settings ? { ...local.settings, ...settings } : local.settings;
     const settingsChanged = !sameSettings(local.settings, merged);
     local.settings = merged;
@@ -235,7 +291,7 @@ export class CollaborationController {
   }
   credentials(): InteractionCredentials | null {
     const local = this.local;
-    if (!local?.lease || !this.state || !this.owns()) return null;
+    if (this.ownsMapAcquisition() || !local?.lease || !this.state || !this.owns()) return null;
     return { epoch: this.state.epoch, lease_id: local.lease, sequence: ++local.sequence };
   }
   release(pose?: ReadonlyPose, kinds?: readonly InteractionKind[]): number | null {
@@ -245,6 +301,10 @@ export class CollaborationController {
     if (this.matchesKinds(kinds)) this.finish("confirm", pose);
   }
   cancel(kinds?: readonly InteractionKind[]): void {
+    if (this.ownsMapAcquisition()) {
+      if (kinds === undefined) this.cancelPendingNavigationMapGoal();
+      return;
+    }
     if (!this.matchesKinds(kinds)) return;
     this.settling = null;
     const local = this.local;
@@ -264,6 +324,9 @@ export class CollaborationController {
   tick(): void {
     if (!this.port.ready()) return;
     const now = this.port.now();
+    if (this.mapGoal && now >= this.mapGoal.deadline) {
+      this.cancelPendingNavigationMapGoal(true, "Navigation map goal timed out");
+    }
     this.flush();
     const local = this.local;
     if (local?.lease && this.state && now - local.lastRenewed >= AUTHORITY_RENEW_INTERVAL_S) {
@@ -282,6 +345,7 @@ export class CollaborationController {
     this.routes = { preview: null, active_goal: null };
   }
   reset(): void {
+    this.cancelPendingNavigationMapGoal(true);
     this.settling = null;
     this.clearLocal();
     this.state = null;
@@ -296,7 +360,7 @@ export class CollaborationController {
       (local.lease === authority.lease_id || local.acquisitionId === authority.acquisition_id);
   }
   private matchesKinds(kinds?: readonly InteractionKind[]): boolean {
-    return kinds === undefined || !!this.local && kinds.includes(this.local.kind);
+    return !this.ownsMapAcquisition() && (kinds === undefined || !!this.local && kinds.includes(this.local.kind));
   }
   private finishDeferred(): void {
     const local = this.local;
@@ -352,6 +416,11 @@ export class CollaborationController {
     local.lastRenewed = local.lastSent;
   }
   private clearLocal(): void {
+    if (this.ownsMapAcquisition() && !this.mapGoal?.confirmId) {
+      const dropped = this.mapGoal;
+      this.mapGoal = null;
+      dropped?.finish(new Error("Navigation map authority was denied or retired"));
+    }
     this.local = null;
     this.presentation.prediction = null;
   }

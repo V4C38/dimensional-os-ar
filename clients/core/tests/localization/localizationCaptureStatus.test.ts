@@ -66,6 +66,7 @@ describe("localizationCaptureStatus", () => {
               reason: null,
               nav_goal: { preview: false, available: true, reason: null },
               nav_joystick: { available: true, reason: null },
+              nav_map: { available: false, reason: "Map unavailable" },
             },
             localization: { available: true, reason: null },
             estop: { available: true, reason: null },

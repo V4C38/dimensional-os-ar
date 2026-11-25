@@ -2,9 +2,15 @@ import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
 import { SetupWizardView } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SetupWizardView";
-import { RUNTIME_LAYOUTS, SETUP_LAYOUTS, PANEL_GEOMETRY, panelContentOffset, panelFooterY, easePanel } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SpecsPanelPresentation";
+import { RUNTIME_LAYOUTS, SETUP_LAYOUTS, PANEL_GEOMETRY, panelContentOffset, panelFooterY, capabilityPanelProfile, easePanel } from "../../Assets/Scripts/DimOSSpecsClient/presentation/SpecsPanelPresentation";
 
 describe("compact panel geometry", () => {
+  it("fits localization, arm speed, navigation map and LiDAR together", () => {
+    const profile = capabilityPanelProfile([["localizeHeading",3],["localize",6.4],["speed",10],
+      ["navHeading",3],["navMap",6.4],["lidar",3,1],["tabs",6.4,1],["range",6.4]]);
+    expect(profile.height).toBeLessThanOrEqual(PANEL_GEOMETRY.maximumHeight);
+    expect(profile.rows.range - 3.2).toBeGreaterThan(profile.rows.footer + 3.2);
+  });
   it("fits every stable state without changing the calibrated width", () => {
     expect(PANEL_GEOMETRY.width).toBe(90);
     for (const profile of [...Object.values(RUNTIME_LAYOUTS), ...Object.values(SETUP_LAYOUTS)]) {

@@ -16,7 +16,10 @@ import math
 import struct
 import threading
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from dimos.ar.websocket.protocol import NavigationMapRequest
 from uuid import uuid4
 
 CHUNK_BYTES = 16_384
@@ -216,7 +219,7 @@ def binary_chunks(identity: int, payload: bytes) -> Iterable[bytes]:
 
 
 class BulkPeer:
-    """One replaceable asset per identity and one latest LiDAR sample."""
+    """One replaceable asset per identity and one pending sample per sensor kind."""
 
     def __init__(
         self, websocket: Any, epoch: str, budget: TokenBucket,
@@ -227,7 +230,13 @@ class BulkPeer:
         self._local = TokenBucket(BULK_BYTES_PER_SECOND, MAX_BULK_RECORD_BYTES)
         self._assets: OrderedDict[tuple[str, str], BulkAsset] = OrderedDict()
         self._latest: OrderedDict[tuple[str, str], str] = OrderedDict()
-        self._lidar: tuple[str, bytes] | None = None
+        self._lidar: tuple[dict[str, Any], bytes] | None = None
+        self.navigation_map_request: NavigationMapRequest | None = None
+        self._navigation_map: tuple[dict[str, Any], bytes] | None = None
+        self._last_navigation_map: tuple[dict[str, Any], bytes] | None = None
+        self._acknowledged_map_grid: str | None = None
+        self._offered_map_grid: tuple[str, str] | None = None
+        self._last_sensor = "navigation_map"
         self._serial = 0
         self._wake = asyncio.Event()
         self._current = False
@@ -237,7 +246,7 @@ class BulkPeer:
 
     @property
     def busy(self) -> bool:
-        return self._current or bool(self._assets) or self._lidar is not None
+        return self._current or bool(self._assets) or self._lidar is not None or self._navigation_map is not None
 
     def enqueue(self, asset: BulkAsset) -> None:
         key = asset.kind, asset.ref["id"]
@@ -255,10 +264,54 @@ class BulkPeer:
             self._assets.popitem(last=False)
         self._wake.set()
 
-    def lidar(self, data: bytes, *, shared_frame_id: str = "") -> None:
+    def lidar(
+        self, data: bytes, *, shared_frame_id: str = "", source_generation: int | None = None
+    ) -> None:
         if len(data) <= MAX_BULK_RECORD_BYTES:
-            self._lidar = (shared_frame_id, data)
+            header: dict[str, Any] = {"shared_frame_id": shared_frame_id}
+            if source_generation is not None:
+                header["source_generation"] = source_generation
+            self._lidar = (header, data)
             self._wake.set()
+
+    def set_navigation_map(self, request: NavigationMapRequest) -> None:
+        current = self.navigation_map_request
+        if current is not None and current.subscription_id == request.subscription_id:
+            if request.sequence <= current.sequence:
+                return
+        elif not request.enabled:
+            return
+        if not request.enabled or current is None or current.subscription_id != request.subscription_id:
+            self._acknowledged_map_grid = None
+            self._offered_map_grid = None
+        self.navigation_map_request = request if request.enabled else None
+        self._navigation_map = self._last_navigation_map = None
+
+    def acknowledge_navigation_map_grid(self, subscription_id: str, grid_id: str) -> None:
+        request = self.navigation_map_request
+        if request and request.subscription_id == subscription_id and self._offered_map_grid == (subscription_id, grid_id):
+            self._acknowledged_map_grid = grid_id
+
+    def navigation_map(self, request: NavigationMapRequest, header: dict[str, Any], data: bytes) -> None:
+        if self.navigation_map_request is request and len(data) <= MAX_BULK_RECORD_BYTES:
+            cell_count = header["width"] * header["height"]
+            identity = [header["odom_reference_id"], header["source_generation"], header["width"],
+                        header["height"], header["resolution"], header["origin"]]
+            grid_id = hashlib.sha256(dumps(identity).encode() + data[:cell_count]).hexdigest()
+            header = {**header, "grid_id": grid_id}
+            comparable = {key: value for key, value in header.items() if key != "snapshot_sequence"}, data
+            if comparable == self._last_navigation_map and self._acknowledged_map_grid == grid_id:
+                return
+            self._last_navigation_map = comparable
+            self._navigation_map = (header, data)
+            self._wake.set()
+
+    async def _send_binary(self, kind: str, header: dict[str, Any], payload: bytes) -> None:
+        self._serial = (self._serial + 1) % 2**32
+        await self._send(dumps({"type": "bulk_binary_begin", "kind": kind, "epoch": self.epoch,
+                               "id": self._serial, "total_bytes": len(payload), **header}) + "\n")
+        for chunk in binary_chunks(self._serial, payload):
+            await self._send(chunk)
 
     async def consume(self, size: int) -> None:
         if not 0 <= size <= min(MAX_BULK_RECORD_BYTES, self.budget.capacity):
@@ -286,7 +339,7 @@ class BulkPeer:
 
     async def run(self) -> None:
         while True:
-            if not self._assets and self._lidar is None:
+            if not self._assets and self._lidar is None and self._navigation_map is None:
                 self._wake.clear()
                 await self._wake.wait()
             self._current = True
@@ -298,15 +351,22 @@ class BulkPeer:
                         if self._latest.get(key) != asset.ref["revision"]:
                             break
                         await self._send(record)
+                elif self._navigation_map is not None and (
+                    self._lidar is None or self._last_sensor == "lidar"
+                ):
+                    (header, payload), self._navigation_map = self._navigation_map, None
+                    self._last_sensor = "navigation_map"
+                    included = self._acknowledged_map_grid != header["grid_id"]
+                    if included:
+                        self._acknowledged_map_grid = None
+                        self._offered_map_grid = (header["subscription_id"], header["grid_id"])
+                    else:
+                        payload = payload[header["width"] * header["height"]:]
+                    await self._send_binary("navigation_map", {**header, "grid_included": included}, payload)
                 elif self._lidar is not None:
-                    (shared_frame_id, payload), self._lidar = self._lidar, None
-                    self._serial = (self._serial + 1) % 2**32
-                    await self._send(dumps({"type": "bulk_binary_begin", "kind": "lidar",
-                                           "epoch": self.epoch, "id": self._serial,
-                                           "shared_frame_id": shared_frame_id,
-                                           "total_bytes": len(payload)}) + "\n")
-                    for chunk in binary_chunks(self._serial, payload):
-                        await self._send(chunk)
+                    (header, payload), self._lidar = self._lidar, None
+                    self._last_sensor = "lidar"
+                    await self._send_binary("lidar", header, payload)
             finally:
                 self._current_asset = None
                 self._current = False

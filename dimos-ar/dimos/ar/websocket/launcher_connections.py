@@ -9,12 +9,13 @@ class LauncherConnections:
         self.enabled = os.environ.get("DIMOS_AR_LAUNCHER_CONNECTIONS") == "1"
         self._last: str | None = None
 
-    def publish(self, robot: str, status: str, client_ids: tuple[str, ...]) -> None:
+    def publish(self, robot: str, status: str, clients: tuple[tuple[str, str], ...]) -> None:
         if not self.enabled:
             return
         rows = [{"kind": "robot", "name": robot, "status": status}]
         rows.extend(
-            {"kind": "client", "id": client_id, "status": "online"} for client_id in client_ids
+            {"kind": "client", "id": client_id, "name": name, "status": "online"}
+            for client_id, name in clients
         )
         message = json.dumps(rows, separators=(",", ":"))
         if message != self._last:

@@ -12,6 +12,7 @@ export class V2BulkPeer {
   private upload: { id: number; bytes: Buffer; offset: number; captureId: string } | null = null;
   private captureId: string | null = null;
   private captureSerial = 0;
+  private mapSerial = 0;
   async install(page: Page) {
     await page.routeWebSocket(/\/bulk(?:\?.*)?$/, ws => {
       this.socket = ws;
@@ -64,6 +65,30 @@ export class V2BulkPeer {
     this.bulk({ type: "bulk_binary_begin", kind: "lidar", shared_frame_id: "fixture-map", epoch: "fixture-epoch", id: 1, total_bytes: data.length });
     for (const packet of fixtureBinaryPackets(data)) this.socket!.send(Buffer.from(packet));
   }
+  navigationMap(
+    request: { subscription_id: string; sequence: number; center?: [number, number] },
+    target: [number, number] | null = null,
+  ): void {
+    const id = 2;
+    const width = 120, height = 120, resolution = 0.1;
+    const [x, y] = request.center ?? [0, 0];
+    const data = Buffer.alloc(width * height + 12 + (target ? 16 : 0));
+    data.fill(40, width * 20, width * 22);
+    data.writeFloatLE(1, width * height);
+    data.writeFloatLE(1, width * height + 4);
+    data.writeFloatLE(0.6, width * height + 8);
+    if (target) {
+      data.writeFloatLE(target[0], width * height + 20);
+      data.writeFloatLE(target[1], width * height + 24);
+    }
+    this.bulk({ type: "bulk_binary_begin", kind: "navigation_map", epoch: "fixture-epoch",
+      id, total_bytes: data.length, subscription_id: request.subscription_id, sequence: request.sequence,
+      snapshot_sequence: ++this.mapSerial, odom_reference_id: "fixture-odom", source_generation: 0, shared_frame_id: "fixture-shared", map_odom_rotation: [0, 0, 0, 1],
+      width, height, resolution, origin: [x - 6, y - 6], robot: [0, 0, 0],
+      height_count: 1, route_count: target ? 1 : 0, target, grid_included: true, grid_id: "a".repeat(64) });
+    for (const packet of fixtureBinaryPackets(data, id)) this.socket!.send(Buffer.from(packet));
+  }
+
   private prepare(message: Value): Value {
     const result = { ...message };
     if (["pose", "nav_goal", "interaction_state", "agent_skill", "presence_state", "manipulation_state"].includes(String(result.type))) result.shared_frame_id ??= "fixture-map";

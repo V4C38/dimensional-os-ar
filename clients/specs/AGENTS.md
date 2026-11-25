@@ -70,12 +70,12 @@ both this switch and `global.deviceInfoSystem.isEditor()` before registering eve
 or replacing dependencies: tests cannot run on the device even if the switch was
 saved on accidentally.
 
-Integration tests run only when explicitly requested. The native test runner copies
-the project, attaches the optional scenario to **Integration Test Harness**, and uses
-Lens Studio MCP to set **Auto Run = true** in that disposable editor project. It
-switches Auto Run off on exit, including failure and focus-limit abort, without
-raising the editor. The normal production project retains Auto Run off and contains
-no `Assets/Review` fixtures. Never deploy a disposable test copy.
+Integration tests run only when explicitly requested. Prefer the already-open production
+project using `review.py --production-project` to avoid repeated cold imports. The runner
+attaches scenarios through Lens Studio MCP, enables **Auto Run** for the test, and
+restores the authored harness and removes `Assets/Review` on exit. Never deploy while
+the review is running. Use a disposable project when isolation is specifically needed.
+On a focus-limit abort, follow the authorization rule above before source restoration.
 
 Before handing the lens back for device testing, verify the production project is
 open, Auto Run is false, no Review scenario assets/hosts are present, and the native

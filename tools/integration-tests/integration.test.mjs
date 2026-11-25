@@ -8,8 +8,12 @@ import { coverage, numberImages, finishRun, reviewDataRoot, publishGoldenVideo }
 
 test("each client has an explicit golden order including manipulation", () => {
   assert.equal(validateCatalog(), true);
-  assert.equal(goldenChapters("specs").length, 16);
-  assert.equal(goldenChapters("webxr").length, 16);
+  assert.equal(goldenChapters("specs").length, 19);
+  assert.equal(goldenChapters("webxr").length, 19);
+  for (const client of ["webxr", "specs"]) {
+    const ids = goldenChapters(client).map(row => row.id);
+    assert.deepEqual(ids.slice(ids.indexOf("map_open"), ids.indexOf("map_open") + 3), ["map_open", "map_pan_zoom", "map_goal"]);
+  }
   for (const client of ["webxr", "specs"])
     assert.deepEqual(applicableCases(client, "golden").map(row => row.id), goldenChapters(client).map(row => row.id));
   const armIds = ["manipulation_select", "manipulation_preview", "manipulation_execute", "manipulation_following", "manipulation_controls"];

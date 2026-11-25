@@ -48,6 +48,10 @@ export interface WebXRUISnapshot {
   operatingMode: OperatingMode;
   lidarMode: LidarDisplayMode;
   lidarAvailable: boolean;
+  navMapAvailable?: boolean;
+  navMapEnabled?: boolean;
+  navMapClickToWalk?: boolean;
+  navMapCanWalk?: boolean;
   lidarPreferences?: LidarDisplayPreferences;
   lidarReceived?: number;
   cameraStatus?: string;
@@ -70,6 +74,8 @@ export class WebXRUIPresenter {
   readonly sensors: LidarDisplayController;
   get wizardStep(): WizardStep { return this.flow.step; }
   debugEnabled = false;
+  navMapEnabled = true;
+  navMapClickToWalk = true;
   manipulationDiagnostics: () => string = () => "—";
   private get openedFromRuntime(): boolean { return this.flow.openedFromRuntime; }
   private localizationError: string | null = null;
@@ -214,6 +220,10 @@ export class WebXRUIPresenter {
       localizationAvailable: view.capabilities?.localization.available === true,
       manipulationAvailable: view.capabilities?.manipulation?.available === true,
       lidarAvailable: view.capabilities?.lidar.available === true,
+      navMapAvailable: view.capabilities?.navigation.nav_map.available === true,
+      navMapEnabled: this.navMapEnabled,
+      navMapClickToWalk: this.navMapClickToWalk,
+      navMapCanWalk: view.capabilities?.navigation.nav_goal.available === true,
       agentAvailable: view.capabilities?.agent.available === true,
       resumeOperation: view.state?.safety?.stopped === true,
       estopAvailable: view.state?.safety?.stopped ? view.state.safety.can_resume : view.capabilities?.estop.available === true,

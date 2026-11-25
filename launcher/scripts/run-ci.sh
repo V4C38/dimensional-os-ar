@@ -76,11 +76,23 @@ check_runtime_tools() {
 }
 
 hydrate_existing_lfs() {
-  local pattern="$1" path
+  local pattern="$1" path attempt
   local paths=() patterns=()
   # LFS accepts comma-separated globs; Git pathspecs need separate arguments.
   IFS=',' read -r -a patterns <<< "$pattern"
-  git -C "${ROOT}" lfs fetch --include="${pattern}" --exclude=""
+  # The LFS batch endpoint can return transient server errors even when all
+  # objects exist. Retry the fetch itself; never continue with missing assets.
+  for attempt in 1 2 3 4; do
+    if git -C "${ROOT}" lfs fetch --include="${pattern}" --exclude=""; then
+      break
+    fi
+    if [[ "${attempt}" -eq 4 ]]; then
+      echo "Git LFS fetch failed after ${attempt} attempts." >&2
+      return 1
+    fi
+    echo "Git LFS fetch failed; retrying (attempt $((attempt + 1))/4)." >&2
+    sleep "$((1 << attempt))"
+  done
   # `lfs pull` also checks out missing files, undoing deliberate working deletions.
   # Fresh checkout pointers exist, so hydrate only tracked files still present.
   while IFS= read -r -d '' path; do

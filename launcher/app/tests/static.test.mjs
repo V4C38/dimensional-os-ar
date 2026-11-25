@@ -242,12 +242,21 @@ test("hardware requests call the injected fetch without an object receiver", asy
 });
 
 
-test("saved simulation never becomes the next launcher default", async () => {
+test("saved source and recording selections survive launcher reload", async () => {
   const { LauncherPreferences } = await import("../static/persistence.mjs");
   const preferences = new LauncherPreferences();
-  preferences.hydrate({ go2_source: "simulated", openyam_source: "simulated" });
-  assert.equal(preferences.values.go2_source, "auto");
-  assert.equal(preferences.values.openyam_source, "auto");
+  preferences.hydrate({
+    go2_source: "simulated", openyam_source: "device:can1",
+    replay: "/recordings/go2.db", openyam_replay: "/recordings/arm.db",
+    replay_streams: { go2: { lidar: "lidar" } },
+    recordings: { go2: ["/recordings/go2.db"] },
+  });
+  assert.equal(preferences.values.go2_source, "simulated");
+  assert.equal(preferences.values.openyam_source, "device:can1");
+  assert.equal(preferences.values.replay, "/recordings/go2.db");
+  assert.equal(preferences.values.openyam_replay, "/recordings/arm.db");
+  assert.deepEqual(preferences.replayStreams.go2, { lidar: "lidar" });
+  assert.deepEqual(preferences.recordings.go2, ["/recordings/go2.db"]);
 });
 
 test("automatic CAN discovery replaces a stale interface after reconnect", async () => {
@@ -274,4 +283,46 @@ test("automatic CAN discovery replaces a stale interface after reconnect", async
   assert.equal(hardware.resolvedCan, "can2");
   await hardware.refreshCan({ ...options, interface: "can2" });
   assert.equal(hardware.canStatus.ready, true);
+});
+
+test("replay scrubber holds the draft and serializes the latest seek", async () => {
+  const { replayTimeline } = await import("../static/replay-timeline.mjs");
+  function element() {
+    return Object.assign(new EventTarget(), { setAttribute() {} });
+  }
+  const root = element(), slider = element(), time = element(), status = element();
+  const buttons = { play: element(), pause: element(), stop: element() };
+  const requests = [];
+  const timeline = replayTimeline({
+    root, slider, time, status, buttons,
+    request: (_, options) => new Promise(resolve => requests.push({ body: JSON.parse(options.body), resolve })),
+  });
+  const active = { session_id: "recording", state: "playing", elapsed_s: 3, duration_s: 65 };
+  timeline.observe(active);
+  assert.equal(root.hidden, false);
+  assert.equal(time.textContent, "00:03 / 01:05");
+  slider.value = "20";
+  slider.dispatchEvent(new Event("input"));
+  timeline.observe({ ...active, elapsed_s: 4 });
+  assert.equal(slider.value, "20");
+  assert.equal(requests.length, 0);
+  slider.dispatchEvent(new Event("change"));
+  assert.deepEqual(requests[0].body, { session_id: "recording", action: "seek", elapsed_s: 20 });
+  assert.equal(status.textContent, "Seeking…");
+
+  for (const position of ["25", "30"]) {
+    slider.value = position;
+    slider.dispatchEvent(new Event("input"));
+    slider.dispatchEvent(new Event("change"));
+  }
+  assert.equal(requests.length, 1);
+  requests[0].resolve(response({}));
+  await new Promise(setImmediate);
+  assert.equal(requests.length, 2);
+  assert.equal(requests[1].body.elapsed_s, 30);
+
+  timeline.observe(null);
+  requests[1].resolve(response({}));
+  await new Promise(setImmediate);
+  assert.equal(root.hidden, true);
 });

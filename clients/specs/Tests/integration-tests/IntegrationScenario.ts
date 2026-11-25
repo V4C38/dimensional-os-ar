@@ -26,6 +26,9 @@ export class ReviewScenario extends BaseScriptComponent {
   root: any;
   peer!: IntegrationV2Fixture;
   input: IntegrationInput | null = null;
+  mapHands: IntegrationInput[] = [];
+  mapRequest: any = null;
+  mapGoal: any = null;
   private restoreCamera: (() => void) | null = null;
   private lidarPreferencesConfigured = false;
   steps: Step[] = [];
@@ -66,6 +69,7 @@ export class ReviewScenario extends BaseScriptComponent {
     this.createEvent("OnStartEvent").bind(() => this.createEvent("UpdateEvent").bind(() => this.tick()));
     this.createEvent("OnDestroyEvent").bind(() => {
       this.input?.restore();
+      this.mapHands.forEach(hand => hand.restore());
       this.restoreCamera?.();
       this.restoreCamera = null;
     });
@@ -118,6 +122,7 @@ export class ReviewScenario extends BaseScriptComponent {
     };
     this.peer.onGoal = target => this.navigationGoal(target, false);
     this.peer.onNavigationCancel = () => this.state("idle", null);
+    this.peer.onMapGoal = target => { this.mapGoal = target; if (this.mapRequest) this.peer.navigationMap(this.mapRequest, "native-fixture-odom", target.position); };
     this.cameraPosition = root.cameraObject.getTransform().getWorldPosition();
     this.cameraRotation = root.cameraObject.getTransform().getWorldRotation();
     this.tracking = root.cameraObject.getComponent("Component.DeviceTracking") as DeviceTracking | null;
@@ -129,7 +134,7 @@ export class ReviewScenario extends BaseScriptComponent {
       manipulation: { available: false, reason: "No arm" },
       object_detection: { available: false, reason: "No detector" },
       lidar: available, localization: available, estop: available, agent: available,
-      navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hand input only" } } };
+      navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hand input only" }, nav_map: available } };
     root.transport.connect = () => { };
     root.transport.close = () => { };
     root.transport.createSibling = () => this.peer;
@@ -175,6 +180,14 @@ export class ReviewScenario extends BaseScriptComponent {
   }
   command(message: any): void {
     if (this.armGolden?.command(message)) return;
+    if (message.type === "navigation_map_request") {
+      this.mapRequest = message.enabled ? message : null;
+      if (this.mapRequest) this.peer.navigationMap(message, "native-fixture-odom", this.mapGoal?.position ?? null);
+      return;
+    }
+    if (message.type === "interaction_request" && message.action === "acquire" && message.source_id === "navigation-map") {
+      this.after(0.01, () => this.peer.command(message)); return;
+    }
     if (this.peer.command(message)) return;
     if (message.type === "lidar_settings_request") {
       this.lidarState = { enabled: message.enabled, min_height_m: message.min_height_m, max_height_m: message.max_height_m, max_range_m: message.max_range_m };
@@ -350,6 +363,10 @@ export class ReviewScenario extends BaseScriptComponent {
     }
     if (this.profile === "golden" || step.id === "navigation_failure") scene();
     else this.after(3, scene);
+    if (step.id === "setup_entry") this.after(0.5, () => this.emit({
+      type: "host", action: "update_framing", aspect: (this.root.cameraObject.getComponent("Component.Camera") as Camera).aspect,
+      bounds: this.captureBounds(step.id),
+    }));
   }
   lidar(): void {
     const count = CATALOG.fixtures.pointLimit, bytes = new Uint8Array(16 + count * 12), view = new DataView(bytes.buffer);
@@ -369,7 +386,7 @@ export class ReviewScenario extends BaseScriptComponent {
     width: number;
     height: number;
   } {
-    if (id.startsWith("manipulation_")) return { x: 0, y: 0, width: 1, height: 1 };
+    if (id.startsWith("manipulation_") || id.startsWith("map_")) return { x: 0, y: 0, width: 1, height: 1 };
     const root = this.root, camera = root.cameraObject.getComponent("Component.Camera") as Camera;
     const worldCases = new Set(["robot_hover", "robot_selected", "relocalization", "navigation_preview", "navigation_drag", "navigation_route", "robot_movement", "navigation_success", "navigation_cancelled", "world_marker"]);
     let points: vec3[] = [];
@@ -393,6 +410,8 @@ export class ReviewScenario extends BaseScriptComponent {
     const screen = points.map(point => camera.worldSpaceToScreenSpace(point));
     const xs = screen.map(point => point.x), ys = screen.map(point => point.y);
     const left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
+    if (!Number.isFinite(left + right + top + bottom) || right - left < 0.05 || bottom - top < 0.05)
+      return { x: 0, y: 0, width: 1, height: 1 };
     const padX = (right - left) * 0.075, padY = (bottom - top) * 0.075;
     const x = Math.max(0, left - padX), y = Math.max(0, top - padY);
     return { x, y, width: Math.min(1, right + padX) - x, height: Math.min(1, bottom + padY) - y };

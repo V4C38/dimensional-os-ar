@@ -131,6 +131,7 @@ async function boot(): Promise<void> {
       jpeg: new BrowserJpegEncoder(),
     });
     const client = new DimOSWebXRClient({
+      clientName: () => HMD_OPTIONS.find(option => option.id === select.value)?.label ?? "WebXR",
       transport: new BrowserWebSocketTransport({ url }),
       clock: new BrowserClientClock(),
       camera,

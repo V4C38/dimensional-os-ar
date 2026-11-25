@@ -32,14 +32,43 @@ it("faces a moving viewer in yaw and pitch without roll or moving a pinned setup
   expect(panel.position).toEqual(position);
 });
 
-it("raises palm menus another 8 cm without changing controller placement", () => {
+it("places the menu beside the source for hands and controllers", () => {
   const eye = new THREE.Vector3(0, 1.6, 0), position = new THREE.Vector3(0, 1, -0.3);
   for (const hand of [false, true]) {
-    const anchor = new MenuAnchorController(), panel = new THREE.Group();
-    const source = { hand: hand ? {} : undefined } as XRInputSource;
-    anchor.attach(source, position, eye, new THREE.Quaternion(), panel);
-    anchor.update(position, eye, panel, 1);
-    expect(panel.position.y - position.y).toBeCloseTo(hand ? 0.20 : 0.12);
-    expect(panel.position.z - position.z).toBeCloseTo(-0.18);
+    for (const handedness of ["left", "right"] as const) {
+      const anchor = new MenuAnchorController(), panel = new THREE.Group();
+      const source = { hand: hand ? {} : undefined, handedness } as XRInputSource;
+      anchor.attach(source, position, eye, new THREE.Quaternion(), panel);
+      anchor.update(position, eye, panel, 1);
+      expect(panel.position.x - position.x).toBeCloseTo(handedness === "left" ? 0.24 : -0.24);
+      expect(panel.position.y - position.y).toBeCloseTo(0.04);
+      expect(panel.position.z - position.z).toBeCloseTo(-0.18);
+    }
   }
+});
+
+it("uses wrist position rather than wrist rotation and retains resize offsets", () => {
+  const anchor = new MenuAnchorController(), panel = new THREE.Group();
+  const source = { handedness: "left", hand: {} } as unknown as XRInputSource;
+  const position = new THREE.Vector3(0, 1, 0), eye = new THREE.Vector3(0, 1.6, 1);
+  anchor.attach(source, position, eye, new THREE.Quaternion(), panel);
+  anchor.shift(new THREE.Vector3(0, 0, 0.05));
+  const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), Math.PI / 2);
+  anchor.update(position, eye, panel, 1, yaw);
+  expect(panel.position.x).toBeCloseTo(0.24);
+  expect(panel.position.z).toBeCloseTo(-0.13);
+  const fixed = panel.position.clone();
+  anchor.update(position, eye, panel, 1, new THREE.Quaternion().setFromEuler(new THREE.Euler(0.8, -1.2, 0.5)));
+  expect(panel.position.distanceTo(fixed)).toBeLessThan(1e-6);
+});
+
+it.each(["left", "right"] as const)("rotates the %s controller anchor only horizontally", handedness => {
+  const anchor = new MenuAnchorController(), panel = new THREE.Group();
+  const source = { handedness } as XRInputSource;
+  const position = new THREE.Vector3(0, 1, 0), eye = new THREE.Vector3(0, 1.6, 1);
+  anchor.attach(source, position, eye, new THREE.Quaternion(), panel);
+  const rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(0.4, 0.7, 0.6, "YXZ"));
+  anchor.update(position, eye, panel, 1, rotation);
+  const expected = new THREE.Vector3(handedness === "right" ? -0.24 : 0.24, 0.04, -0.18).applyAxisAngle(new THREE.Vector3(0, 1, 0), 0.7).add(position);
+  expect(panel.position.distanceTo(expected)).toBeLessThan(1e-6);
 });

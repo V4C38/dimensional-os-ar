@@ -33,9 +33,9 @@ DEFAULT_LIDAR_MAX_HZ = 2.0
 class _BroadcastSink(Protocol):
     def schedule_broadcast_text(self, text: str) -> None: ...
 
-    def schedule_broadcast_binary(self, data: bytes, *, shared_frame_id: str) -> None: ...
+    def schedule_broadcast_binary(self, data: bytes, *, shared_frame_id: str, source_generation: int | None = None) -> None: ...
 
-    def schedule_send_binary_to_client(self, client_id: str, data: bytes, *, shared_frame_id: str) -> None: ...
+    def schedule_send_binary_to_client(self, client_id: str, data: bytes, *, shared_frame_id: str, source_generation: int | None = None) -> None: ...
 
 
 class RobotStatePublisher:
@@ -67,17 +67,19 @@ class RobotStatePublisher:
         self._lidar_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ar-lidar")
         self._lidar_task: asyncio.Task[None] | None = None
         self._lidar_pending: tuple[PointCloud2, LidarSettings, tuple[float, float, float] | None,
-                                  dict[str, LidarSettings] | None, int, FrameSnapshot] | None = None
+                                  dict[str, LidarSettings] | None, int, FrameSnapshot, int | None] | None = None
         self._source_generation = 0
         self._closed = False
 
-    async def publish_lidar_async(self, msg: PointCloud2, *, lidar: LidarSettings) -> None:
+    async def publish_lidar_async(
+        self, msg: PointCloud2, *, lidar: LidarSettings, source_generation: int | None = None
+    ) -> None:
         if self._closed or not lidar.enabled:
             return
         self._lidar_pending = (
             msg, lidar, self._robot_position(),
             dict(self._subscriptions()) if self._subscriptions is not None else None,
-            self._source_generation, self._frames(),
+            self._source_generation, self._frames(), source_generation,
         )
         if self._lidar_task is None or self._lidar_task.done():
             self._lidar_task = asyncio.create_task(self._drain_lidar())
@@ -99,12 +101,13 @@ class RobotStatePublisher:
             pending, self._lidar_pending = self._lidar_pending, None
             if pending is None:
                 return
-            msg, settings, position, subscriptions, generation, frame = pending
+            msg, settings, position, subscriptions, generation, frame, wire_generation = pending
             loop = asyncio.get_running_loop()
             future = loop.run_in_executor(
                 self._lidar_executor,
                 partial(self.publish_lidar, msg, lidar=settings,
-                        _snapshot=(position, subscriptions, generation), _frame=frame),
+                        _snapshot=(position, subscriptions, generation), _frame=frame,
+                        source_generation=wire_generation),
             )
             future.add_done_callback(lambda done: None if done.cancelled() else done.exception())
             # Actual work remains exclusive after cancellation: no replacement
@@ -139,7 +142,7 @@ class RobotStatePublisher:
     def publish_lidar(
         self, msg: PointCloud2, *, lidar: LidarSettings,
         _snapshot: tuple[tuple[float, float, float] | None, dict[str, LidarSettings] | None, int] | None = None,
-        _frame: FrameSnapshot | None = None,
+        _frame: FrameSnapshot | None = None, source_generation: int | None = None,
     ) -> None:
         if not lidar.enabled:
             return
@@ -184,10 +187,24 @@ class RobotStatePublisher:
                     or current.revision != frame.revision):
                 return
             if subscriptions is None:
-                self._ws.schedule_broadcast_binary(payload, shared_frame_id=frame.shared_frame_id)
+                if source_generation is None:
+                    self._ws.schedule_broadcast_binary(payload, shared_frame_id=frame.shared_frame_id)
+                else:
+                    self._ws.schedule_broadcast_binary(
+                        payload, shared_frame_id=frame.shared_frame_id,
+                        source_generation=source_generation,
+                    )
             else:
                 for client_id in clients:
-                    self._ws.schedule_send_binary_to_client(client_id, payload, shared_frame_id=frame.shared_frame_id)
+                    if source_generation is None:
+                        self._ws.schedule_send_binary_to_client(
+                            client_id, payload, shared_frame_id=frame.shared_frame_id
+                        )
+                    else:
+                        self._ws.schedule_send_binary_to_client(
+                            client_id, payload, shared_frame_id=frame.shared_frame_id,
+                            source_generation=source_generation,
+                        )
         self._lidar_last_emit_mono = time.monotonic()
         processing_ms = (time.monotonic() - started) * 1000
         self._lidar_timing.record(

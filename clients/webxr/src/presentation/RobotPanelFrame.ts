@@ -66,13 +66,20 @@ export function panelIcon(segments: readonly (readonly [number, number])[]): THR
  return icon;
 }
 
+/** The shared window drag handle, also used by the navigation map. */
+export const PANEL_DRAG_BAR_HALF_WIDTH = 0.0065;
+
+export function panelDragBar(size = 1): THREE.Mesh<THREE.ShapeGeometry, THREE.MeshBasicMaterial> {
+  const shape = new THREE.Shape(); const w=.12*size,r=PANEL_DRAG_BAR_HALF_WIDTH*size;
+  shape.absarc(-w/2+r,0,r,Math.PI/2,Math.PI*1.5,false);
+  shape.absarc(w/2-r,0,r,-Math.PI/2,Math.PI/2,false); shape.closePath();
+  return new THREE.Mesh(new THREE.ShapeGeometry(shape), new THREE.MeshBasicMaterial({color:0xd1d1d6,transparent:true,opacity:.6,depthWrite:false,side:THREE.DoubleSide}));
+}
+
 /** MainUI window chrome, shared by compact robot controls. */
 export function panelChrome(parent: THREE.Object3D, radius: number, size = 1) {
   const material = () => new THREE.MeshBasicMaterial({color:0xd1d1d6,transparent:true,opacity:.6,depthWrite:false,side:THREE.DoubleSide});
-  const shape = new THREE.Shape(); const w=.12*size,r=.0065*size;
-  shape.absarc(-w/2+r,0,r,Math.PI/2,Math.PI*1.5,false);
-  shape.absarc(w/2-r,0,r,-Math.PI/2,Math.PI/2,false); shape.closePath();
-  const bar = new THREE.Mesh(new THREE.ShapeGeometry(shape),material()); bar.raycast=()=>{}; parent.add(bar);
+  const bar = panelDragBar(size); bar.raycast=()=>{}; parent.add(bar);
   const zone = (w:number,h:number) => { const m=new THREE.Mesh(new THREE.PlaneGeometry(w,h),new THREE.MeshBasicMaterial({visible:false})); m.userData.rayPriority=UI_CONTROL_RAY_PRIORITY; registerRayTarget(m);parent.add(m);return m; };
   const corner = (side:number) => { const m = new THREE.Mesh(new THREE.RingGeometry(radius+.012*size,radius+.019*size,24,1,side>0?-Math.PI/2:Math.PI,Math.PI/2),material());m.material.opacity=0;m.raycast=()=>{};parent.add(m);return m; };
   return {bar,barZone:zone(.22*size,.05*size),cornerArcs:{left:corner(-1),right:corner(1)},cornerZones:{left:zone(.09*size,.09*size),right:zone(.09*size,.09*size)}};

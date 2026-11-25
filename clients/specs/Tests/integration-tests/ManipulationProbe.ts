@@ -111,7 +111,7 @@ export class ReviewScenario extends BaseScriptComponent {
         manipulation: yes,
         localization: yes,
         lidar: no, agent: no, estop: yes,
-        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no } } });
+        navigation: { ...no, nav_goal: { ...no, preview: false }, nav_joystick: no, nav_map: { available: false, reason: "Map unavailable" } } } });
     if (root.session.view().connection !== "ready")
       throw new Error(`Native manipulation fixture handshake failed: ${root.session.view().lastError}`);
     this.peer.reset();
@@ -155,7 +155,7 @@ export class ReviewScenario extends BaseScriptComponent {
     for (let i = 0; i < vertices.length; i += 3) {
       radius = Math.max(radius, matrix.multiplyPoint(new vec3(vertices[i],vertices[i+1],vertices[i+2])).distance(center));
     }
-    this.check("ee_collider_matches_visible_marker", Math.abs((collider.shape as SphereShape).radius * handle.getTransform().getWorldScale().x - radius) < .01);
+    this.check("ee_collider_matches_visible_marker", Math.abs((collider.shape as SphereShape).radius * handle.getTransform().getWorldScale().x - radius * 1.15) < .01);
     const controls = renderer.controls, preview = controls.buttons.get("plan"), execute = controls.buttons.get("execute");
     this.check("ee_action_font_sizes_match", Math.abs(controls.gripper.labelText.size - preview.labelText.size) < .01 && Math.abs(controls.gripper.labelText.size - execute.labelText.size) < .01);
     this.check("mini_panel_scaling_disabled", !controls.panelPresenter.frame.allowScaling);

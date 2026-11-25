@@ -1,7 +1,8 @@
 # Native Specs integration tests
 
 The runner uses the shared [integration catalog](../../../tools/integration-tests/README.md)
-and runs the production Lens in a disposable Lens Studio 5.15 project. Native
+and runs the Lens in Lens Studio 5.15. Prefer the already-open production project with
+`--production-project`; the runner removes its temporary test fixtures afterward. Native
 SIK/SUK controls, ClientCore state and production renderers remain active;
 transport, camera capture, recognition and tracked input poses are deterministic
 fixtures. These suites verify editor behavior; physical tracking, recognition,
@@ -10,15 +11,15 @@ audio playback and device performance belong to hardware validation.
 Install the official Python MCP SDK into your chosen tools environment and activate it. Set `DIMOS_CLAD_ROOT` to your CLAD installation root (default `~/.local/share/ls515-clad`), containing the app and `ls515-clad/state/mcp.json`, or pass `--app` and `--mcp-config` explicitly. Start the 5.15 CLAD app and its MCP server, then reserve the MCP session:
 
 ```sh
-python3 clients/specs/tools/review.py
+python3 clients/specs/tools/review.py --production-project
 ```
 
-Native reviews refuse to start while macOS reports elevated memory pressure. Close heavy DimOS/viewer workloads before cold Lens imports on memory-constrained hosts. The editor launcher applies the verified Rosetta AOT bypass on each launch.
+Close heavy DimOS/viewer workloads before cold Lens imports on memory-constrained hosts. The editor launcher applies the verified Rosetta AOT bypass on each launch.
 
 The default `--suite all` runs the golden and regression suites plus the manipulation
 and navigation-overlap probes. Use `--suite golden` or
 `--suite regression` for diagnosis. The golden path follows the shared
-chapters with 87 seconds of declared holds at normal speed, including one brief re-localization. The shared catalog
+chapters with 102 seconds of declared holds at normal speed, including one brief re-localization and map interactions. The shared catalog
 owns chapter order and duration limits. It records continuous rendered
 footage and performs **no screenshot exports during the flow**. The shared
 finalizer extracts its stills after capture finishes. The 18 regression/platform cases run
@@ -29,7 +30,7 @@ Native still capture prefers PNG. If the editor-code PNG request times out, the 
 
 Results default to `Review Data/specs/<runId>/`:
 
-- `golden-path.mp4`: readable 1280×900, 30 fps, 75–105 second continuous walkthrough, produced by default.
+- `golden-path.mp4`: readable 1280×900, 30 fps, 75–125 second continuous walkthrough, produced by default.
 - `01_setup_entry.png`, etc.: catalog-ordered case evidence, matching WebXR names.
 - `results.json`: catalog coverage, assertion results and source identity.
 - `golden/` and `regression/`: per-suite manifests, events, native logs and evidence.
@@ -69,9 +70,9 @@ changing UI scale. Its metadata records windows, viewport bounds and actual
 ScreenCaptureKit timestamps. Video duration must match the capture clock; visual
 inspection of checkpoint frames remains necessary. No slideshow is substituted.
 
-The runner dismisses blocking Home/Welcome windows. It copies source assets,
-attaches the harness with the editor API, waits for native compilation, and
-restores and resumes the real source project after success or failure. It never
+The runner dismisses blocking Home/Welcome windows, attaches the harness with the
+editor API, waits for native compilation, and restores the production project after
+success or failure. It never
 hand edits scene files. `--keep-open` is an explicit diagnostic opt-out: that
 project contains fake hardware ports and scripted UI transitions.
 
@@ -118,6 +119,7 @@ Focused repo-backed probes use the same runner and restoration contract:
 ```sh
 python3 clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/BendyLaserProbe.ts
 python3 clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/NavMarkerOverlapProbe.ts
+python3 clients/specs/tools/review.py --harness clients/specs/Tests/integration-tests/NavigationMapProbe.ts
 ```
 
 Setup profile heights, fixed top edge, follow controls, PIN/IP, audio reset,
@@ -128,6 +130,8 @@ including during motion and held input, and checks width, opacity, start offset,
 tracking loss, direct input and native ray-only targets. `NavMarkerOverlapProbe`
 uses real physics hits and SIK's target chooser to drag an unselected marker through
 the robot's selection box, then verifies that robot picking and UI occlusion remain.
+`NavigationMapProbe` uses the production bulk decoder, native map renderer and
+SIK interactor to check map subscription, rendering, goal authority and unsubscribe.
 
 Harness log lines begin `SPECS_REVIEW ` followed by JSON. Each result includes
 `caseId`, `name`, boolean `passed`, and `unixMs`. The canonical case assertion
@@ -204,7 +208,7 @@ budget tests cannot establish headset thermal, memory or stereo behavior.
 
 ## Native execution policy
 
-[AGENTS.md](../../../clients/specs/AGENTS.md#lens-studio-integration-test-focus-limit) owns the focus-restoration budget, abort/resume rules, editor-only harness requirements and production handoff checks. Follow that policy for every run. The runner persists one focus budget across recorder processes and suites through `FocusPolicy.swift`. It disables the disposable harness on exit and gates success on restored production source with Auto Run false, matching compiler bytes and matching source/workspace manifests. Never deploy a disposable test copy.
+[AGENTS.md](../../../clients/specs/AGENTS.md#lens-studio-integration-test-focus-limit) owns the focus-restoration budget, abort/resume rules, editor-only harness requirements and production handoff checks. Follow that policy for every run. The runner persists one focus budget across recorder processes and suites through `FocusPolicy.swift`. It disables the harness on exit and gates success on restored production source with Auto Run false, matching compiler bytes and matching source/workspace manifests. Never deploy a disposable test copy.
 
 ## Specs arm rendering
 
@@ -232,13 +236,14 @@ checks remain opt-in through Integration Test Harness and cannot run on device.
 Successful non-golden raw recordings are discarded after validation unless extra
 media is requested. Golden footage, screenshots, logs and failure recordings remain.
 
-### Explicit production-project review
+### Production-project review
 
-When explicitly requested, use `review.py --production-project --suite all` to run
-in the existing production project. The runner preserves the authored harness gate,
+Use `review.py --production-project --suite all` for routine native review in the
+existing production project. The runner preserves the authored harness gate,
 attaches temporary scenarios through MCP, and disables/removes those scenarios on
 exit. It removes `Assets/Review` fixtures and audits the production compiler cache
-before accepting the result. Default reviews continue to use disposable projects.
+before accepting the result. The runner's bare command still selects a disposable project;
+pass `--production-project` explicitly to avoid the extra import.
 The same focus budget applies across all suites and retries. Never deploy while a
 production-project review is running.
 

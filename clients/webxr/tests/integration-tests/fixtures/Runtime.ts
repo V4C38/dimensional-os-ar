@@ -24,7 +24,7 @@ export const shared = JSON.parse(
 export async function bootstrap(
   page: Page,
   mode: "hand" | "controller" = "hand",
-  options: { manipulation?: boolean } = {},
+  options: { manipulation?: boolean; navigationMap?: "live" | "recording" } = {},
 ) {
   const commands: any[] = [];
   const bulk = new V2BulkPeer(); await bulk.install(page);
@@ -42,6 +42,7 @@ export async function bootstrap(
     enabled: false, min_height_m: 0.1, max_height_m: 1.5, max_range_m: 5,
   };
   let safetyStopped = false;
+  let mapViewport: Parameters<V2BulkPeer["navigationMap"]>[0] | null = null;
   let navigation = { state: "idle", outcome: null as string | null };
   const state = (nav?: string, outcome: string | null = null) => {
     if (nav !== undefined) navigation = { state: nav, outcome };
@@ -49,6 +50,9 @@ export async function bootstrap(
       type: "state",
       server: { connected_clients: 1 },
       lidar: { ...lidarSettings },
+      ...(options.navigationMap === "recording" ? {
+        playback: { state: "playing", elapsed_s: 0, duration_s: 30, source_generation: 0 },
+      } : {}),
       nav: { ...navigation },
       agent: { idle: true },
       safety: { stopped: safetyStopped, can_resume: safetyStopped, ...(safetyStopped ? { stop_id: "fixture-stop" } : {}) },
@@ -104,6 +108,12 @@ export async function bootstrap(
       commands.push(command);
       if (command.type === "localization_tracking") trackingReferenceId = command.tracking_reference_id;
       const available = { available: true, reason: null };
+      const unavailable = { available: false, reason: "Unavailable in this fixture" };
+      const motion = options.navigationMap === "recording" ? unavailable : available;
+      if (command.type === "navigation_map_request" && options.navigationMap) {
+        mapViewport = command.enabled ? command : null;
+        if (mapViewport) bulk.navigationMap(mapViewport);
+      }
       if (command.type === "hello_request") {
         arm?.anchor(command.ts_client);
         send({
@@ -122,6 +132,7 @@ export async function bootstrap(
             armodule_version: "0.2.0",
           },
           robot: { ...shared.fixtures.robot, ...(armIdentity ? { display_name: "OpenYAM" } : {}) },
+          ...(options.navigationMap === "recording" ? { source: { kind: "recording", read_only: true, name: "fixture.db" } } : {}),
           capabilities: {
             manipulation: options.manipulation ? available : { available: false, reason: "No arm" },
             object_detection: { available: false, reason: "No detector" },
@@ -130,9 +141,10 @@ export async function bootstrap(
             estop: available,
             agent: available,
             navigation: {
-              ...available,
-              nav_goal: { ...available, preview: true },
-              nav_joystick: available,
+              ...motion,
+              nav_goal: { ...motion, preview: motion.available },
+              nav_joystick: motion,
+              nav_map: options.navigationMap ? available : unavailable,
             },
           },
         });
@@ -144,10 +156,14 @@ export async function bootstrap(
           position: shared.fixtures.pose,
           orientation: [0, 0, 0, 1],
           ts: command.ts_client,
+          ...(options.navigationMap === "recording" ? { source_generation: 0 } : {}),
         });
       }
       if (command.type === "interaction_request") {
-        const result = peer.accept(command, arm?.interactionFacts().motion_busy ?? false);
+        const request = command.map_target
+          ? { ...command, position: [...command.map_target.position, 0], orientation: [0, 0, 0, 1] }
+          : command;
+        const result = peer.accept(request, arm?.interactionFacts().motion_busy ?? false);
         arm?.interaction(command, result);
         if (command.action === "cancel_navigation" && result.status === "accepted") state("idle");
         const released = result.released;
@@ -156,6 +172,7 @@ export async function bootstrap(
             const [x, y, z] = released.target.position;
             peer.activeGoal = { type: "nav_goal", pose: [x, y, z, 0], path_poses: [[2,0,0,0],[2.5,y/2,0,0],[x,y,z,0]], ts: performance.now() };
             send(peer.activeGoal); state("following_path");
+            if (mapViewport) bulk.navigationMap(mapViewport, [x, y]);
           }
         }
         interactionState();

@@ -37,11 +37,44 @@ export type Capability =
 export type NavigationCapability = Capability & {
   nav_goal: Capability & { preview: boolean };
   nav_joystick: Capability;
+  nav_map: Capability;
 };
 
 export type Capabilities = {
   [K in Exclude<CapabilityName, "navigation" | "manipulation" | "object_detection">]: Capability;
 } & { navigation: NavigationCapability; manipulation: Capability; object_detection: Capability };
+
+export interface NavigationMapSnapshot {
+  readonly subscription_id: string;
+  readonly sequence: number;
+  readonly snapshot_sequence: number;
+  readonly odom_reference_id: string;
+  readonly shared_frame_id: string;
+  readonly map_odom_rotation: readonly [number, number, number, number];
+  readonly source_generation: number;
+  readonly origin: readonly [number, number];
+  readonly resolution: number;
+  readonly width: number;
+  readonly height: number;
+  readonly robot: readonly [number, number, number];
+  readonly target: readonly [number, number] | null;
+  readonly cells: NavigationMapCells;
+  readonly heights: readonly (readonly [number, number, number])[];
+  readonly route: readonly (readonly [number, number, number, number])[];
+}
+
+export interface NavigationMapCells {
+  readonly length: number;
+  costAt(index: number): number | undefined;
+  /** Copy display bytes with unknown encoded as 0 and known costs as 1 through 101. */
+  copyDisplayBytes(destination: Uint8Array): void;
+}
+
+export interface NavigationMapTarget {
+  readonly position: readonly [number, number];
+  readonly odom_reference_id: string;
+  readonly source_generation: number;
+}
 
 export interface TimeSync {
   ts_client: number;
@@ -108,7 +141,7 @@ export interface State {
     reason: string | null;
   };
   safety?: { stopped: boolean; can_resume: boolean; stop_id?: string };
-  playback?: { state: "playing" | "ended"; elapsed_s: number; duration_s: number };
+  playback?: { state: "playing" | "paused" | "stopped" | "seeking" | "ended" | "error"; elapsed_s: number; duration_s: number; source_generation?: number };
   nav_preview_costmap_ts?: number;
   type: "state";
   server: { connected_clients: number };
@@ -272,6 +305,7 @@ export interface ClientError {
 }
 
 export interface HelloRequest {
+  client_name?: string;
   presence?: boolean;
   protocol_version: 2;
   type: "hello_request";

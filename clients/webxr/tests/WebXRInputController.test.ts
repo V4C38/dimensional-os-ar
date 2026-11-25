@@ -12,7 +12,7 @@ function fixture() {
     tracking: () => true, session: () => ({ visibilityState: "visible" }) as XRSession,
   });
   const internal = controller as any;
-  internal.interaction = { hit: vi.fn(), direct: { cancel() {} }, releaseCaptures() {}, dispose() {} };
+  internal.interaction = { hit: vi.fn(), direct: { cancel() {}, isDirect: () => false }, releaseCaptures() {}, dispose() {} };
   internal.mainMenu = { isEmergencyTarget: () => true, endManipulation() {}, dispose() {}, panel: new THREE.Group() };
   return { controller, internal, client };
 }

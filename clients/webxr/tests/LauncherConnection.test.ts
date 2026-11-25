@@ -5,6 +5,7 @@ import { settingsWriter, profilesForRobot, ProfileSettingsEditor, LauncherPrefer
 import { launcherPresentation } from "../../../launcher/app/static/presentation.mjs";
 import { sourceRequest, replayPreferenceKey, LaunchConfiguration, HardwareDiscovery } from "../../../launcher/app/static/source-selection.mjs";
 import { LauncherSession } from "../../../launcher/app/static/launcher-session.mjs";
+import { replayTimeline } from "../../../launcher/app/static/replay-timeline.mjs";
 import { markerMountEditor } from "../../../launcher/app/static/marker-mount-editor.mjs";
 import { logConsole } from "../../../launcher/app/static/log-console.mjs";
 
@@ -20,7 +21,7 @@ const script = readFileSync("../../launcher/app/static/app.js", "utf8");
 afterEach(() => { window.dispatchEvent(new Event("pagehide")); vi.unstubAllGlobals(); document.documentElement.innerHTML = ""; });
 
 function startLauncher() {
-  Object.assign(window, { LauncherSession, settingsWriter, profilesForRobot, ProfileSettingsEditor, LauncherPreferences, LaunchConfiguration, HardwareDiscovery, launcherPresentation, logConsole, markerMountEditor, sourceRequest, replayPreferenceKey });
+  Object.assign(window, { LauncherSession, replayTimeline, settingsWriter, profilesForRobot, ProfileSettingsEditor, LauncherPreferences, LaunchConfiguration, HardwareDiscovery, launcherPresentation, logConsole, markerMountEditor, sourceRequest, replayPreferenceKey });
   window.eval(script.replace(/^import .*;\n/gm, ""));
 }
 
@@ -49,6 +50,29 @@ it("shows the host IP, PIN and WebXR URL together", () => {
   expect(element("hostIp").textContent).toBe(status.host_ip);
   expect(element("pinSummary").textContent).toBe(status.pin);
   expect(element("webxrNetwork").querySelector("a")?.getAttribute("href")).toBe(status.webxr_url);
+});
+
+it("keeps dimOS install collapsed when switching to a blueprint with missing planner dependencies", async () => {
+  document.documentElement.innerHTML = html;
+  localStorage.clear();
+  vi.stubGlobal("EventSource", class { onmessage = null; close() {} });
+  const json = (data: unknown) => ({ ok: true, json: async () => data });
+  vi.stubGlobal("fetch", vi.fn(async (url: string) => {
+    if (url === "/api/settings") return json({ defaults: metadata, mounts: [] });
+    if (url === "/api/status") return json({ phase: "ready", check_ok: true });
+    if (url === "/api/planner/status") return json({ ready: false });
+    return { ok: false, json: async () => ({}) };
+  }));
+  startLauncher();
+  const blueprint = element("blueprintSelect") as HTMLSelectElement;
+  const install = element("installBanner") as HTMLDetailsElement;
+  await vi.waitFor(() => expect(blueprint.options).toHaveLength(2));
+  blueprint.value = "openyam_ar_planner";
+  blueprint.dispatchEvent(new Event("change"));
+  await vi.waitFor(() => expect(install.classList.contains("needs-setup")).toBe(true));
+  expect(install.open).toBe(false);
+  install.querySelector("summary")!.click();
+  expect(install.open).toBe(true);
 });
 
 it("loads canonical defaults and flushes an autosave before changing profiles", async () => {

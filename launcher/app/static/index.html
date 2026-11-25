@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>dimOS ARModule</title>
-    <link rel="stylesheet" href="/static/app.css?v=launcher-controls-34" />
+    <link rel="stylesheet" href="/static/app.css?v=launcher-controls-36" />
   </head>
   <body>
     <div class="app">
@@ -117,7 +117,17 @@
                   <input type="text" id="robotIp" aria-label="Robot IP address" inputmode="decimal" autocomplete="off" placeholder="192.168.1.10" />
                 </div>
                 <div id="replayRow" class="hidden">
-                  <div class="connection-selector"><select id="playbackSource" aria-label="Recording"><option value="">Default recording</option></select><button type="button" class="btn ghost btn-icon" id="editReplay" aria-label="Add recording">✎</button></div>
+                  <div class="connection-selector"><select id="playbackSource" aria-label="Recording"><option value="">Go2 example</option></select><button type="button" class="btn ghost btn-icon" id="editReplay" aria-label="Add recording">✎</button></div>
+                  <div id="replayTimeline" class="replay-timeline" hidden>
+                    <div class="replay-timeline-controls">
+                      <button type="button" class="btn ghost replay-icon" id="replayPlay" aria-label="Play" title="Play">▶</button>
+                      <button type="button" class="btn ghost replay-icon" id="replayPause" aria-label="Pause" title="Pause">Ⅱ</button>
+                      <button type="button" class="btn ghost replay-icon" id="replayStop" aria-label="Stop" title="Stop">■</button>
+                      <input type="range" id="replayPosition" min="0" max="0" step="0.01" value="0" aria-label="Recording position" />
+                      <span class="value" id="replayTime">00:00 / 00:00</span>
+                    </div>
+                    <p class="hint" id="replayTimelineStatus" role="status"></p>
+                  </div>
                   <div id="replayStreams"></div>
                   <p class="hint" id="replayStatus" role="status"></p>
                 </div>
@@ -198,7 +208,7 @@
                         </div>
                         <details class="localization-option">
                           <summary>
-                            <span>dimOS relocalization <span class="settings-hint">(optional)</span></span>
+                            <span>Relocalization policy <span class="settings-hint">(optional)</span></span>
                           </summary>
                           <div class="provider-fields">
                             <div class="field" id="nativeMapField">
@@ -305,6 +315,6 @@
         <pre class="log" id="log" aria-live="polite"></pre>
       </main>
     </div>
-    <script type="module" src="/static/app.js?v=launcher-review"></script>
+    <script type="module" src="/static/app.js?v=launcher-replay-2"></script>
   </body>
 </html>

@@ -38,6 +38,8 @@ For small follow-up fixes, rerun relevant tests only. Documentation, formatting,
 
 GitHub Actions must use the same gate with job selectors, sharing installation, versions and checks. Local macOS host libraries differ from Ubuntu 24.04 CI; local success does not guarantee remote success.
 
+After pushing, inspect the GitHub Actions run for the exact pushed commit and wait for every required job to finish. Diagnose failures from the job logs, fix and validate them, then amend and push with `--force-with-lease` when the user has requested an amended commit. Repeat until the run is green or report a concrete blocker. Test CI dependency fetching with a cold cache and simulated transient failures; a warm local LFS cache does not establish that a fresh GitHub runner can fetch assets.
+
 ## Architecture & Protocol Rules
 
 Import installed DimOS; do not edit upstream source. Reuse ClientCore without copying it or adding platform APIs. Change `dimos-ar/PROTOCOL.md`, Python `websocket/protocol.py`, and Core `clients/core/src/websocket/protocol.ts` together. Manipulate Lens `.scene` files through Lens Studio MCP tools rather than hand editing.

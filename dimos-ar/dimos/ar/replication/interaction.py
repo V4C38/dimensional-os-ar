@@ -49,6 +49,16 @@ InteractionAction = Literal[
 ]
 
 
+NAVIGATION_MAP_SOURCE = "navigation-map"
+
+
+@dataclass(frozen=True)
+class NavigationMapTarget:
+    position: tuple[float, float]
+    odom_reference_id: str
+    source_generation: int
+
+
 @dataclass(frozen=True)
 class InteractionRequest:
     request_id: str
@@ -66,6 +76,7 @@ class InteractionRequest:
     speed_scale: float | None = None
     gripper: float | None = None
     goal_ts: float | None = None
+    map_target: NavigationMapTarget | None = None
 
 
 @dataclass(frozen=True)
@@ -664,6 +675,7 @@ class InteractionCoordinator:
         request: InteractionRequest,
         *,
         commit: Callable[[SharedTarget, InteractionKind], bool] | None = None,
+        commit_map: Callable[[NavigationMapTarget], SharedTarget | None] | None = None,
     ) -> InteractionResult:
         self.poll()
         previous = self.preflight(client_id, request)
@@ -691,7 +703,7 @@ class InteractionCoordinator:
         elif not self.authorized(client_id, request.epoch, request.lease_id):
             result = self._result(request, "busy" if self._authority else "stale", "not_owner")
         else:
-            result = self._owned(request, commit)
+            result = self._owned(request, commit, commit_map)
         self._remember(cache, request.request_id, result)
         return result
 
@@ -744,6 +756,11 @@ class InteractionCoordinator:
             "manipulation_following",
         ):
             return self._result(request, "rejected", "invalid_kind")
+        if request.source_id == NAVIGATION_MAP_SOURCE and (
+            request.kind != "navigation_planning" or request.position is not None
+            or request.group_id is not None
+        ):
+            return self._result(request, "rejected", "invalid_map_acquisition")
         lease = uuid4().hex
         self.following_tail = None
         self._authority = Authority(
@@ -760,7 +777,7 @@ class InteractionCoordinator:
         self._revision += 1
         if request.position is not None and request.orientation is not None:
             self._update_target(request, sequence=-1)
-        elif request.kind != "joystick":
+        elif request.kind != "joystick" and request.source_id != NAVIGATION_MAP_SOURCE:
             domain = "manipulation" if request.kind.startswith("manipulation_") else "navigation"
             self._active_target_key = (domain, request.group_id)
         self._tail_floor = self._revision
@@ -770,6 +787,7 @@ class InteractionCoordinator:
         self,
         request: InteractionRequest,
         commit: Callable[[SharedTarget, InteractionKind], bool] | None,
+        commit_map: Callable[[NavigationMapTarget], SharedTarget | None] | None,
     ) -> InteractionResult:
         authority = self._authority
         assert authority is not None
@@ -778,7 +796,7 @@ class InteractionCoordinator:
             self._revision += 1
             return self._result(request, "accepted", "renewed", authority.lease_id)
         if request.action == "cancel":
-            if authority.kind == "navigation_planning":
+            if authority.kind == "navigation_planning" and authority.source_id != NAVIGATION_MAP_SOURCE:
                 self._targets.pop(("navigation", None), None)
                 self._active_target_key = None
             self._retire("cancelled")
@@ -787,6 +805,23 @@ class InteractionCoordinator:
             return self._result(request, "rejected", "invalid_action")
         if request.sequence is None or request.sequence <= authority.sequence:
             return self._result(request, "stale", "sequence_retired")
+        if authority.source_id == NAVIGATION_MAP_SOURCE:
+            if (
+                authority.kind != "navigation_planning" or request.action != "confirm"
+                or request.map_target is None or commit_map is None
+            ):
+                return self._result(request, "rejected", "invalid_map_confirmation")
+            target = commit_map(request.map_target)
+            self._retire("confirmed" if target is not None else "map_refused")
+            if target is None:
+                return self._result(request, "rejected", "map_goal_unavailable")
+            self._active_target_key = ("navigation", None)
+            self._targets[self._active_target_key] = replace(
+                target, revision=self._revision, sequence=request.sequence,
+            )
+            return self._result(request, "accepted", "released")
+        if request.map_target is not None:
+            return self._result(request, "rejected", "invalid_map_acquisition")
         if request.action == "confirm" and authority.kind != "navigation_planning":
             return self._result(request, "rejected", "not_planning")
         if request.position is None or request.orientation is None:
@@ -975,7 +1010,22 @@ def decode_interaction_request(data: dict[str, Any]) -> InteractionRequest:
     if action == "cancel_navigation":
         identifier(data, "epoch", required=True)
         finite_number(data.get("goal_ts"), "goal_ts")
+    map_target = None
+    if "map_target" in data:
+        raw_target = data["map_target"]
+        if action != "confirm" or pose or not isinstance(raw_target, dict):
+            raise ValueError("map_target requires a pose-free confirmation")
+        xy = finite_vector(raw_target.get("position"), "map_target.position", 2)
+        source_generation = nonnegative_integer(raw_target.get("source_generation"), "source_generation")
+        if source_generation > 2**53 - 1:
+            raise ValueError("invalid source generation")
+        map_target = NavigationMapTarget(
+            (xy[0], xy[1]),
+            required_identifier(raw_target.get("odom_reference_id"), "odom_reference_id"),
+            source_generation,
+        )
     return InteractionRequest(
+        map_target=map_target,
         request_id=request_id,
         action=cast("InteractionAction", action),
         goal_ts=finite_number(data["goal_ts"], "goal_ts") if "goal_ts" in data else None,

@@ -181,6 +181,48 @@
       ]
     },
     {
+      "id": "map_open",
+      "label": "Open navigation map",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "map_open"
+      ]
+    },
+    {
+      "id": "map_pan_zoom",
+      "label": "Pan and scale navigation map",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "map_pan_zoom"
+      ]
+    },
+    {
+      "id": "map_goal",
+      "label": "Set a navigation goal from the map",
+      "platforms": [
+        "webxr",
+        "specs"
+      ],
+      "group": "golden",
+      "video": true,
+      "holdS": 3,
+      "assertions": [
+        "map_goal"
+      ]
+    },
+    {
       "id": "agent_response",
       "label": "Explicit send and response",
       "platforms": [
@@ -521,7 +563,7 @@
   ],
   "golden": {
     "minDurationS": 75,
-    "maxDurationS": 105,
+    "maxDurationS": 125,
     "chapters": [
       {
         "id": "setup_entry",
@@ -558,6 +600,18 @@
       {
         "id": "navigation_success",
         "durationS": 3
+      },
+      {
+        "id": "map_open",
+        "durationS": 5
+      },
+      {
+        "id": "map_pan_zoom",
+        "durationS": 5
+      },
+      {
+        "id": "map_goal",
+        "durationS": 5
       },
       {
         "id": "agent_response",
@@ -626,6 +680,18 @@
         "durationS": 2
       },
       {
+        "id": "map_open",
+        "durationS": 4
+      },
+      {
+        "id": "map_pan_zoom",
+        "durationS": 4
+      },
+      {
+        "id": "map_goal",
+        "durationS": 4
+      },
+      {
         "id": "agent_response",
         "durationS": 5
       },
@@ -655,6 +721,6 @@
       }
     ],
     "webxrMinDurationS": 45,
-    "webxrMaxDurationS": 75
+    "webxrMaxDurationS": 95
   }
 }

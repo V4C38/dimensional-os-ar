@@ -382,7 +382,7 @@ test("launcher prioritizes session controls and shows live connection details", 
   await expect(refresh).toBeHidden();
   await expect(robot.locator("#webrtcSummary")).toBeHidden();
   const recording = robot.getByLabel("Recording", { exact: true });
-  await expect(recording.locator("option")).toHaveText(["Default recording"]);
+  await expect(recording.locator("option")).toHaveText(["Go2 example"]);
   await expect(recording).toHaveCSS("height", "34px");
   const addRecording = robot.getByRole("button", { name: "Add recording" });
   await expect(addRecording).toHaveCSS("height", "34px");
@@ -391,7 +391,7 @@ test("launcher prioritizes session controls and shows live connection details", 
   await robot.getByRole("button", { name: "Add recording" }).click();
   await expect(recording).toHaveValue("/tmp/recording-1.db");
   await robot.getByRole("button", { name: "Add recording" }).click();
-  await expect(recording.locator("option")).toHaveText(["Default recording", "recording-1.db", "recording-2.db"]);
+  await expect(recording.locator("option")).toHaveText(["Go2 example", "recording-1.db", "recording-2.db"]);
   await recording.selectOption("/tmp/recording-1.db");
   await expect(recording).toHaveValue("/tmp/recording-1.db");
   const profile = page.getByRole("region", { name: "Robot config" });
@@ -445,7 +445,7 @@ test("launcher prioritizes session controls and shows live connection details", 
   await marker.click();
   const map = relocalization.getByLabel("Prescanned LiDAR map");
   await expect(map).toBeHidden();
-  await relocalization.getByText("dimOS relocalization").click();
+  await relocalization.getByText("Relocalization policy").click();
   await expect(map).toBeVisible();
   await expect(relocalization.getByLabel("Minimum distance (m)")).toHaveValue("1");
   await expect(relocalization.getByLabel("Minimum rotation (°)")).toHaveValue("30");
@@ -680,8 +680,73 @@ test("launcher waits for a profile switch and reports a rejected stop", async ({
   await expect(run).toBeEnabled();
 
   const robotSource = page.getByLabel("Robot source", { exact: true });
-  await expect(robotSource).toHaveValue("auto");
-  await robotSource.selectOption("simulated");
+  await expect(robotSource).toHaveValue("simulated");
   await expect(page.getByLabel("Recording", { exact: true })).toHaveValue("/tmp/saved.db");
   await expect(page.getByLabel("color stream")).toBeVisible();
+});
+
+test("replay timeline keeps playback buttons, scrubber and time in one row", async ({ page }) => {
+  await page.setContent(`<style>${launcherCss}</style><main class="app" style="width: 460px">
+    <div class="replay-timeline-controls">
+      <button class="btn ghost replay-icon" aria-label="Play">▶</button>
+      <button class="btn ghost replay-icon" aria-label="Pause">Ⅱ</button>
+      <button class="btn ghost replay-icon" aria-label="Stop">■</button>
+      <input type="range" id="replayPosition" aria-label="Recording position" />
+      <span id="replayTime">00:00 / 01:00</span>
+    </div></main>`);
+  const boxes = await Promise.all([
+    page.getByRole("button", { name: "Play" }).boundingBox(),
+    page.getByRole("button", { name: "Stop" }).boundingBox(),
+    page.getByRole("slider").boundingBox(),
+    page.locator("#replayTime").boundingBox(),
+  ]);
+  const [play, stop, slider, time] = boxes;
+  expect(play && stop && slider && time).toBeTruthy();
+  expect(play!.x).toBeLessThan(stop!.x);
+  expect(stop!.x + stop!.width).toBeLessThanOrEqual(slider!.x);
+  expect(slider!.x + slider!.width).toBeLessThanOrEqual(time!.x);
+  expect(Math.abs((slider!.y + slider!.height / 2) - (play!.y + play!.height / 2))).toBeLessThan(1);
+});
+
+test("reload restores a running replay and its timeline", async ({ page }) => {
+  await page.addInitScript(() => {
+    class SilentEvents { onmessage = null; close() {} }
+    Object.defineProperty(window, "EventSource", { value: SilentEvents });
+  });
+  const playback = { session_id: "replay-1", state: "paused", elapsed_s: 12, duration_s: 60, generation: 0 };
+  await page.route("http://launcher.test/**", async route => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/" || /^\/static\/[\w.-]+\.(css|js|mjs)$/.test(path)) {
+      const name = path === "/" ? "index.html" : path.slice("/static/".length);
+      await route.fulfill({
+        contentType: name.endsWith(".html") ? "text/html" : name.endsWith(".css") ? "text/css" : "text/javascript",
+        body: readFileSync(new URL(`../../../../launcher/app/static/${name}`, import.meta.url)),
+      });
+    } else if (path === "/api/settings") {
+      await route.fulfill({ json: { defaults: {
+        blueprints: [{ id: "unitree-go2-ar", label: "Go2", robot: "unitree_go2", manipulation: false }],
+        log_levels: ["INFO"], log_level: "INFO",
+        localization: { travel_threshold_m: 1, heading_threshold_deg: 30 }, mounts: [], preset_marker_ids: [],
+      } } });
+    } else if (path === "/api/status") {
+      await route.fulfill({ json: { phase: "running", check_ok: true, blueprint: "unitree-go2-ar", playback } });
+    } else if (path === "/api/launcher-preferences") {
+      await route.fulfill({ json: { go2_source: "simulated", replay: "/tmp/saved.db" } });
+    } else if (path === "/api/robot-profiles") {
+      await route.fulfill({ json: { profiles: [{ id: "go2", name: "Go2", robot: "unitree_go2", settings: { mounts: [] } }] } });
+    } else if (path === "/api/replay/inspect") {
+      await route.fulfill({ json: { streams: {}, candidates: {}, needs_selection: false } });
+    } else {
+      await route.fulfill({ json: {} });
+    }
+  });
+  await page.goto("http://launcher.test/");
+  for (let visit = 0; visit < 2; visit++) {
+    await expect(page.getByLabel("Robot source", { exact: true })).toHaveValue("simulated");
+    await expect(page.getByLabel("Recording", { exact: true })).toHaveValue("/tmp/saved.db");
+    await expect(page.getByLabel("Recording position")).toBeVisible();
+    await expect(page.locator("#replayTime")).toHaveText("00:12 / 01:00");
+    await expect(page.getByRole("button", { name: "Play", exact: true })).toBeEnabled();
+    if (visit === 0) await page.reload();
+  }
 });

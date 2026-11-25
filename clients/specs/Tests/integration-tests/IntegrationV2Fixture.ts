@@ -13,9 +13,11 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
   private captureId: string | null = null;
   private serial = 0;
   private generation = 0;
+  private mapSerial = 0;
   private interaction: Value = this.empty();
   onUpload: (bytes: Uint8Array) => void = () => {};
   onGoal: (pose: Value) => void = () => {};
+  onMapGoal: (target: Value) => void = () => {};
   onNavigationCancel: () => void = () => {};
   onFollowingRelease: (target: Value) => Value | null = () => null;
   onTakeover: () => void = () => {};
@@ -142,6 +144,7 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
     if (action === "release" && authority.kind === "navigation_planning") authority.held = false;
     else if (action === "release" || action === "confirm") {
       const target = state.target;
+      if (action === "confirm" && request.map_target) this.onMapGoal(request.map_target);
       if (target) target.phase = "committed";
       if (target && (action === "confirm" || authority.kind === "live")) this.onGoal(target);
       if (target && authority.kind === "manipulation_following") state.following_tail = this.onFollowingRelease(target);
@@ -158,6 +161,25 @@ export class IntegrationV2Fixture implements BindableWebSocketTransport {
   lidar(data: Uint8Array): void {
     const id = ++this.serial;
     this.bulk({ type: "bulk_binary_begin", kind: "lidar", shared_frame_id: "fixture-map", epoch: "fixture-epoch", id, total_bytes: data.length });
+    for (let offset = 0; offset < data.length; offset += 16372) {
+      const payload = data.subarray(offset, offset + 16372), packet = new Uint8Array(payload.length + 12), header = new DataView(packet.buffer);
+      header.setUint32(0, 0x32425241, true); header.setUint32(4, id, true); header.setUint32(8, offset, true);
+      packet.set(payload, 12); this.handlers.onTransportBinary(packet);
+    }
+  }
+  navigationMap(request: Value, odomReference: string, target: readonly [number, number] | null = null): void {
+    const id = ++this.serial, width = 120, height = 120, resolution = 0.1;
+    const [x, y] = request.center ?? [0, 0];
+    const data = new Uint8Array(width * height + 12 + (target ? 16 : 0));
+    data.fill(40, width * 20, width * 22);
+    const values = new DataView(data.buffer), base = width * height;
+    values.setFloat32(base, 1, true); values.setFloat32(base + 4, 1, true); values.setFloat32(base + 8, 0.6, true);
+    if (target) { values.setFloat32(base + 20, target[0], true); values.setFloat32(base + 24, target[1], true); }
+    this.bulk({ type: "bulk_binary_begin", kind: "navigation_map", epoch: "fixture-epoch", id, total_bytes: data.length,
+      subscription_id: request.subscription_id, sequence: request.sequence, snapshot_sequence: ++this.mapSerial,
+      odom_reference_id: odomReference, source_generation: 0, shared_frame_id: "fixture-map", map_odom_rotation: [0, 0, 0, 1],
+      width, height, resolution, origin: [x - 6, y - 6], robot: [0, 0, 0], height_count: 1, route_count: target ? 1 : 0, target,
+      grid_included: true, grid_id: "a".repeat(64) });
     for (let offset = 0; offset < data.length; offset += 16372) {
       const payload = data.subarray(offset, offset + 16372), packet = new Uint8Array(payload.length + 12), header = new DataView(packet.buffer);
       header.setUint32(0, 0x32425241, true); header.setUint32(4, id, true); header.setUint32(8, offset, true);

@@ -20,24 +20,13 @@ import generate as shader_generator
 
 
 class ReviewEvidenceTests(unittest.TestCase):
-    def test_memory_pressure_prevents_native_work_before_it_starts(self) -> None:
-        for pressure in ("2\n", "4\n"):
-            with self.subTest(pressure=pressure), \
-                 mock.patch.object(review, "arguments", return_value=mock.Mock(prepare_only=False)), \
-                 mock.patch.object(review.subprocess, "check_output", return_value=pressure), \
-                 mock.patch.object(review, "_run") as run, \
-                 mock.patch.object(review, "KeepAwake") as awake:
-                self.assertEqual(review.main(), 2)
-                run.assert_not_called()
-                awake.assert_not_called()
-
-    def test_normal_memory_pressure_allows_native_work(self) -> None:
+    def test_native_work_runs_with_keep_awake(self) -> None:
         with mock.patch.object(review, "arguments", return_value=mock.Mock(prepare_only=False)), \
-             mock.patch.object(review.subprocess, "check_output", return_value="1\n"), \
              mock.patch.object(review, "_run", return_value=0) as run, \
-             mock.patch.object(review, "KeepAwake"):
+             mock.patch.object(review, "KeepAwake") as awake:
             self.assertEqual(review.main(), 0)
             run.assert_called_once()
+            awake.assert_called_once()
 
     def test_every_native_harness_uses_the_scene_auto_run_gate(self) -> None:
         gate = (TOOLS.parent / "Assets/Scripts/Integration Test Harness.ts").read_text()
@@ -426,7 +415,7 @@ class IntegrationHandoffTests(unittest.IsolatedAsyncioTestCase):
             text = (Path(directory) / "IntegrationCatalog.ts").read_text()
             value = json.loads(text.split(" = ", 1)[1].removesuffix(";\n"))
             self.assertEqual(value, load_catalog())
-            self.assertEqual(len(value["golden"]["chapters"]), 16)
+        self.assertEqual(len(value["golden"]["chapters"]), 19)
 
 
 class LegacyGraphTests(unittest.TestCase):

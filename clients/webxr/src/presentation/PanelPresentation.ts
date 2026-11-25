@@ -22,10 +22,16 @@ export function runtimeProfile(startY: number, rows: readonly LayoutRow[]): Pane
   return panelProfile(startY, rows, true, RUNTIME_FOOTER_GAP);
 }
 
+/** Fit all available capability sections without shrinking the controls. */
+export function capabilityProfile(rows: readonly LayoutRow[]): PanelProfile {
+  return layoutPanelRows(0.265, rows, { top: PANEL_TOP, gap: 0.005, bottom: PANEL_BOTTOM_PADDING,
+    action: CONTROL_PANEL_CONTROLS.height, maximumHeight: CONTROL_PANEL_LAYOUT.height, quantum: 0.01 }, true, RUNTIME_FOOTER_GAP);
+}
+
 export const RUNTIME_LAYOUTS = {
-  manual: runtimeProfile(0.146, [["guidance", 0.18], ["status", 0.018]]),
+  manual: runtimeProfile(0.146, [["guidance", 0.10], ["status", 0.018]]),
   agent: runtimeProfile(0.146, [["draft", 0.12], ["actions", 0.064], ["reply", 0.12], ["status", 0.018, 0.01]]),
-  settings: runtimeProfile(.23, [["robotActions",.064],["headset",.03],["debug",.064,.01],["diagnostics",.064],["sound",.064]]),
+  settings: runtimeProfile(.23, [["robotActions",.064],["headset",.03],["debug",.064,.01]]),
   sensors: runtimeProfile(0.112, [["range", 0.064], ["points", 0.064], ["statistics", 0.1, 0.03]]),
   diagnostics: runtimeProfile(0.23, [["logs", 0.26], ["statistics", .1]]),
   alignment: runtimeProfile(0.23, [["guidance", 0.07], ["actions", 0.064]]),

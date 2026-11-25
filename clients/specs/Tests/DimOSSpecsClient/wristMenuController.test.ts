@@ -173,3 +173,46 @@ it.each(["left", "right"] as const)("places the wrist panel 33cm toward the %s f
   controller.tick(.1);
   expect(panel.getTransform().getWorldPosition()).toEqual(new vec3(37,27,-60));
 });
+
+it("keeps the wrist panel open during a map capture and closes after release", () => {
+  setMockTime(0);
+  let facing = true, captured = true, hides = 0;
+  setMockHands({ left: { isTracked: () => true, getPalmPitchAngle: () => facing ? 45 : -80, isFacingCamera: () => facing } });
+  const controller = new WristMenuController({ panel: sceneObject(), anchorRoot: sceneObject(), keepOpen: () => captured,
+    onMenuShow: () => {}, onMenuHide: () => { hides++; } });
+  controller.tick(.016); setMockTime(.3); controller.tick(.016);
+  facing = false; controller.tick(.016); setMockTime(.5); controller.tick(.016);
+  expect(hides).toBe(1); expect(controller.sourceHand()).toBe("left");
+  captured = false; controller.tick(.016);
+  expect(hides).toBe(2); expect(controller.sourceHand()).toBeNull();
+});
+
+it("retains a map-resize offset while following a summoning wrist", () => {
+  setMockTime(0);
+  const wrist = { x: 0, y: 0, z: -60 };
+  setMockHands({ left: { isTracked: () => true, getPalmPitchAngle: () => 45, isFacingCamera: () => true, wrist: { position: wrist } } });
+  const panel = sceneObject();
+  const controller = new WristMenuController({ panel, anchorRoot: sceneObject(), onMenuShow() {}, onMenuHide() {} });
+  controller.tick(.016); setMockTime(.3); controller.tick(.016);
+  const initial = panel.getTransform().getWorldPosition().z;
+  controller.shiftPlacement(new vec3(0, 0, -4));
+  for (let i = 0; i < 30; i++) controller.tick(1 / 60);
+  expect(panel.getTransform().getWorldPosition().z).toBeCloseTo(initial - 4, 1);
+});
+
+it("holds the panel still during map input, then resumes wrist following", () => {
+  setMockTime(0);
+  const wrist = { x: 0, y: 0, z: -60 };
+  let captured = false;
+  setMockHands({ left: { isTracked: () => true, getPalmPitchAngle: () => 45, isFacingCamera: () => true, wrist: { position: wrist } } });
+  const panel = sceneObject();
+  const controller = new WristMenuController({ panel, anchorRoot: sceneObject(), keepOpen: () => captured,
+    onMenuShow() {}, onMenuHide() {} });
+  controller.tick(.016); setMockTime(.3); controller.tick(.016);
+  captured = true; wrist.x = 10;
+  for (let i = 0; i < 30; i++) controller.tick(1 / 60);
+  expect(panel.getTransform().getWorldPosition().x).toBe(0);
+  captured = false;
+  for (let i = 0; i < 30; i++) controller.tick(1 / 60);
+  expect(panel.getTransform().getWorldPosition().x).toBeGreaterThan(9.9);
+});

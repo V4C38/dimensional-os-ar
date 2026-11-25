@@ -22,6 +22,7 @@ describe("WebXRJoystickController", () => {
           navigation: {
             available: true,
             nav_joystick: { available: true, reason: null },
+            nav_map: { available: false, reason: "Map unavailable" },
             nav_goal: { preview: false, available: true, reason: null },
           },
         },

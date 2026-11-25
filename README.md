@@ -272,7 +272,7 @@ The package lives in [`dimos-ar/dimos/ar/`](dimos-ar/dimos/ar/). After the modul
 | `sensors/` | LiDAR and sensor presentation |
 | `robot/` | Robot state, agent mode, Emergency Stop |
 
-The protocol uses two WebSocket lanes: **control** for state, editing control and commands, and **bulk** for LiDAR, images, models and trajectories. One backend serves one robot on port **8787**; multiple clients can connect.
+The protocol uses two WebSocket lanes: **control** for state, editing control and commands, and **bulk** for LiDAR, navigation maps, images, models and trajectories. The map is streamed only while a client has it open; unchanged grid data is reused after acknowledgement while pose and route updates continue. One backend serves one robot on port **8787**; multiple clients can connect.
 
 </details>
 
@@ -291,7 +291,7 @@ SPECS and WebXR implement the protocol and provide the UI.
 
 <br>
 
-A native Lens for Spectacles, built in Lens Studio. Hands pinch the panels and grab goals or the arm target in space.
+A native Lens for Spectacles, built in Lens Studio. Hands pinch the panels and grab goals or the arm target in space. The navigation map opens below the menu when navigation maps are available. Poke the map with a finger to place a navigation goal; pinch or drag to pan, drag the robot marker to reposition a goal, and use two hands to scale the map. The Capabilities page controls map visibility and navigation via the map. The main menu provides the emergency stop.
 
 <p align="center">
   <img src="assets/specs_golden_menu.png" alt="SPECS runtime menu" width="48%" />
@@ -309,7 +309,7 @@ If Lens Studio reports “Failed to perform file operation on folder” for `Cac
 
 <br>
 
-A Three.js and WebXR client for Quest 3 and Quest 3S. Hands and controllers.
+A Three.js and WebXR client for Quest 3 and Quest 3S. Hands and controllers can use the navigation map to inspect and place goals, pan and scale the view, and follow or recenter on the robot. The main menu provides the emergency stop.
 
 <p align="center">
   <img src="assets/webxr_golden_menu.png" alt="WebXR runtime menu with a hand" width="48%" />

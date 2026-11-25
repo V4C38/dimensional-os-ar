@@ -400,6 +400,15 @@ class RobotOdometry:
     def retire(self) -> None:
         self.generation += 1
         self.reference_id = uuid4().hex
+        self._clear_samples()
+
+    def reset_recording_samples(self) -> None:
+        """Discard sample history while keeping the same recording coordinate frame."""
+        self.generation += 1
+        self.clock = RobotSourceClock()
+        self._clear_samples()
+
+    def _clear_samples(self) -> None:
         self._source_frame = None
         self._latest = None
         self.history.clear()

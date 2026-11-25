@@ -16,6 +16,7 @@ from dimos.ar.websocket.bulk import (
     TokenBucket,
     binary_chunks,
 )
+from dimos.ar.websocket.protocol import NavigationMapRequest
 from test_support.websocket import (
     TYPESCRIPT_LOCA_ONE,
     ServerHarness,
@@ -29,6 +30,58 @@ def _plan(count: int = 8192) -> dict:
             "joint_names": [f"j{i}" for i in range(24)], "duration": count / 100,
             "trajectory": [{"time": i / 100, "positions": [i / 10000] * 24}
                            for i in range(count)]}
+
+
+@pytest.mark.asyncio
+async def test_navigation_map_grid_ack_bounds_bandwidth_and_survives_viewport_changes() -> None:
+    peer = BulkPeer(None, "epoch", TokenBucket(1_048_576, 65_536), lambda: 1, lambda: False)
+    frames: asyncio.Queue[tuple[dict, bytes]] = asyncio.Queue()
+
+    async def capture(kind: str, header: dict, payload: bytes) -> None:
+        assert kind == "navigation_map"
+        await frames.put((header, payload))
+
+    peer._send_binary = capture
+    task = asyncio.create_task(peer.run())
+    request = NavigationMapRequest("view", 0, True, None)
+    peer.set_navigation_map(request)
+    header = {"width": 2, "height": 1, "resolution": 1.0, "origin": (0, 0),
+              "odom_reference_id": "odom", "source_generation": 0, "subscription_id": "view",
+              "snapshot_sequence": 1, "robot": (0, 0, 0)}
+    try:
+        peer.navigation_map(request, header, b"\x00\x01dynamic")
+        first, data = await asyncio.wait_for(frames.get(), 1)
+        assert first["grid_included"] and data == b"\x00\x01dynamic"
+        peer.acknowledge_navigation_map_grid("other", first["grid_id"])
+        peer.acknowledge_navigation_map_grid("view", "f" * 64)
+        peer.navigation_map(request, {**header, "snapshot_sequence": 2}, b"\x00\x01dynamic")
+        again, _ = await asyncio.wait_for(frames.get(), 1)
+        assert again["grid_included"]  # no acknowledgement: repeat the keyframe
+        peer.acknowledge_navigation_map_grid("view", first["grid_id"])
+        peer.navigation_map(request, {**header, "snapshot_sequence": 3, "robot": (1, 0, 0)}, b"\x00\x01dynamic")
+        delta, data = await asyncio.wait_for(frames.get(), 1)
+        assert not delta["grid_included"] and data == b"dynamic"
+        request = NavigationMapRequest("view", 1, True, (1, 0))
+        peer.set_navigation_map(request)
+        peer.navigation_map(request, {**header, "snapshot_sequence": 4}, b"\x00\x01dynamic")
+        same, data = await asyncio.wait_for(frames.get(), 1)
+        assert not same["grid_included"] and data == b"dynamic"
+        peer.navigation_map(request, {**header, "snapshot_sequence": 5}, b"\x00\x02dynamic")
+        changed, data = await asyncio.wait_for(frames.get(), 1)
+        assert changed["grid_included"] and data == b"\x00\x02dynamic"
+        # A full grid replaces the client's cache, so returning to A before B is
+        # acknowledged must send A in full again.
+        peer.navigation_map(request, {**header, "snapshot_sequence": 6}, b"\x00\x01dynamic")
+        returned, _ = await asyncio.wait_for(frames.get(), 1)
+        assert returned["grid_included"]
+        replacement = NavigationMapRequest("new-view", 0, True, None)
+        peer.set_navigation_map(replacement)
+        peer.navigation_map(replacement, {**header, "subscription_id": "new-view", "snapshot_sequence": 7}, b"\x00\x01dynamic")
+        reopened, _ = await asyncio.wait_for(frames.get(), 1)
+        assert reopened["grid_included"]
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 def test_maximum_trajectory_is_incremental_and_not_repeated_in_control() -> None:
@@ -103,6 +156,40 @@ async def _attach(stack: AsyncExitStack, harness: ServerHarness, hello: dict):
     ready = json.loads(await asyncio.wait_for(bulk.recv(), 1))
     assert ready["epoch"] == hello["bulk_epoch"]
     return bulk
+
+
+@pytest.mark.asyncio
+async def test_map_grid_ack_round_trip_on_real_bulk_socket() -> None:
+    h = ServerHarness()
+    h.start()
+    try:
+        async with AsyncExitStack() as stack:
+            control = await stack.enter_async_context(websockets.connect(f"ws://127.0.0.1:{h.port}/ws"))
+            hello = await _send_hello_request(control)
+            bulk = await _attach(stack, h, hello)
+            peer = h._server._connection(hello["client_id"]).bulk_peer
+            request = NavigationMapRequest("view", 0, True, None)
+            h.loop.call_soon_threadsafe(peer.set_navigation_map, request)
+            header = {"subscription_id": "view", "sequence": 0, "snapshot_sequence": 1,
+                      "odom_reference_id": "odom", "source_generation": 0, "shared_frame_id": "shared",
+                      "map_odom_rotation": [0, 0, 0, 1], "width": 2, "height": 1, "resolution": 1,
+                      "origin": [0, 0], "robot": [0, 0, 0], "target": None, "height_count": 0, "route_count": 0}
+            h.loop.call_soon_threadsafe(peer.navigation_map, request, header, b"\x00\x01")
+            full = json.loads(await asyncio.wait_for(bulk.recv(), 2))
+            assert full["grid_included"] and full["total_bytes"] == 2
+            assert isinstance(await asyncio.wait_for(bulk.recv(), 2), bytes)
+            await bulk.send(json.dumps({"type": "navigation_map_grid_ack", "subscription_id": "view", "grid_id": full["grid_id"]}))
+            for _ in range(100):
+                if peer._acknowledged_map_grid == full["grid_id"]:
+                    break
+                await asyncio.sleep(.01)
+            assert peer._acknowledged_map_grid == full["grid_id"]
+            h.loop.call_soon_threadsafe(peer.navigation_map, request,
+                                       {**header, "snapshot_sequence": 2, "robot": [1, 0, 0]}, b"\x00\x01")
+            delta = json.loads(await asyncio.wait_for(bulk.recv(), 2))
+            assert not delta["grid_included"] and delta["total_bytes"] == 0
+    finally:
+        h.stop()
 
 
 async def _capture(harness: ServerHarness, control, hello: dict) -> str:

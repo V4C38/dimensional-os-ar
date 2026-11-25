@@ -18,10 +18,11 @@ const capabilities: Capabilities = {
     reason: null,
     nav_goal: { preview: false, available: true, reason: null },
     nav_joystick: { available: false, reason: "off" },
+    nav_map: { available: false, reason: "Map unavailable" },
   },
 };
 
-type MutableFacts<T> = T extends readonly unknown[] ? T : T extends object ? { -readonly [K in keyof T]: MutableFacts<T[K]> } : T;
+type MutableFacts<T> = T extends (...args: never[]) => unknown ? T : T extends readonly unknown[] ? T : T extends object ? { -readonly [K in keyof T]: MutableFacts<T[K]> } : T;
 function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARModuleSessionState> {
   return {
     connection: "ready",
@@ -37,6 +38,7 @@ function view(overrides: Partial<ARModuleSessionState> = {}): MutableFacts<ARMod
     },
     pose: { type: "pose", position: [0, 0, 0], orientation: [0, 0, 0, 1], ts: 0 },
     nav_goal: null,
+    navigationMap: null,
     lidar: null,
     capabilities,
     nav: null,

@@ -1,9 +1,9 @@
 import type { PresencePanel } from "@dimos-ar-client/ClientContracts";
 import { webxrToClientTrackingPose } from "../utilities/WebXRCoordinates";
 import { label, button, place, rect, surface, setText, clip, cameraIcon, gearIcon, layoutText, iconClose, scrollLabel, messageField, tabs, sectionHeading } from "./PanelWidgets";
-import { panelChrome } from "./RobotPanelFrame";
+import { panelChrome, panelIcon } from "./RobotPanelFrame";
 import { updatePanelGesture, type PanelGesture } from "./PanelInteraction";
-import { PanelPageTransitions, PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, runtimeProfile, type PanelProfile } from "./PanelPresentation";
+import { PanelPageTransitions, PANEL_TOP, RUNTIME_LAYOUTS, SETUP_LAYOUTS, panelFooterY, capabilityProfile, type PanelProfile } from "./PanelPresentation";
 import { SpeedSlider } from "./SpeedSlider";
 import { SETUP_SUCCESS_STYLE, strokeJoints2D, STROKE_JOIN_SEGMENTS } from "@dimos-ar-client/presentation/WorldPresentation";
 import { CONTROL_PANEL_COPY as COPY, CONTROL_PANEL_LAYOUT, CONTROL_PANEL_SCALE, robotBadgeText, sensorStatusText, PanelHeightAnimation } from "@dimos-ar-client/presentation/ControlPanelPresentation";
@@ -37,6 +37,8 @@ export type MainMenuCallbacks = {
   onRobot: () => void;
   manipulationSpeed?: () => number;
   onDebug: () => void;
+  onMapToggle?: () => void;
+  onMapClickToggle?: () => void;
   onLidarMode?: (mode: LidarDisplayMode) => void;
   onLidarRange?: (direction: number) => void;
   onLidarPoints?: (direction: number) => void;
@@ -108,6 +110,7 @@ export class MainMenuView {
   private readonly capabilityBody = new THREE.Group();
   private readonly localizationGroup = new THREE.Group();
   private readonly lidarGroup = new THREE.Group();
+  private readonly navMapGroup = new THREE.Group();
   private capabilityProfile: PanelProfile = RUNTIME_LAYOUTS.sensors;
   private capabilityKey = "";
   private readonly details = new THREE.Group();
@@ -178,10 +181,10 @@ export class MainMenuView {
     this.pageViews.runtime.agent.parent!.userData.panelRow = "reply";
     this.pageViews.runtime.inputLabel.parent!.userData.panelRow = "draft";
     for (const action of [this.pageViews.runtime.type, this.pageViews.runtime.clear]) action.userData.panelRow = "actions";
-    this.pageViews.settings.debugToggle.userData.panelRow = "debug"; this.pageViews.settings.soundToggle.userData.panelRow = "sound";
+    this.pageViews.settings.debugToggle.userData.panelRow = "debug"; this.pageViews.settings.soundToggle.userData.panelRow = "debug";
     this.pageViews.diagnostics.debug.userData.panelRow = "logs"; this.pageViews.sensors.sensorStatus.userData.panelRow = "statistics";
     this.pageViews.sensors.rangeLabel.userData.panelRow = this.pageViews.sensors.rangeValue.userData.panelRow = "range";
-    this.pageViews.sensors.pointsValue.userData.panelRow = "points";
+    this.pageViews.sensors.pointsValue.userData.panelRow = "range";
     this.layoutRuntime();
     this.panel.scale.multiplyScalar(CONTROL_PANEL_SCALE.setup);
     this.appearanceRoot.name = "Menu appearance";
@@ -269,8 +272,8 @@ export class MainMenuView {
       if (this.agentEnabled && handlers.onAgentText(this.draft)) this.setDraft("");
     }, "primary");
     const clear = button(this.chat, COPY.clear, -(HALF_WIDTH + GAP) / 2, -0.196, HALF_WIDTH, ACTION_HEIGHT, () => this.setDraft(""));
-    surface(this.manualHelp, 0, 0, CONTENT, 0.18, 0.024, C.fill);
-    label(this.manualHelp, COPY.manualGuidance, 0, 0, CONTENT - 0.056, 0.13, 23, C.muted);
+    surface(this.manualHelp, 0, 0, CONTENT, 0.10, 0.024, C.fill);
+    label(this.manualHelp, "Unselected: drag the robot to reposition.\nSelected: aim, preview, then confirm.", 0, 0, CONTENT - 0.056, 0.07, 23, C.muted);
     const hud = label(this.console, "", 0, -0.251, CONTENT, 0.018, 13, C.muted);
     // Keep the last row above the bottom corner curve.
     const estop = button(this.runtimeFooter, COPY.stop, 0, -0.298, CONTENT, ACTION_HEIGHT, handlers.onEstop, "danger");
@@ -281,10 +284,11 @@ export class MainMenuView {
   private buildSettingsPage(handlers: MainMenuCallbacks) {
     label(this.settingsPage, COPY.settings, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
     iconClose(this.settingsPage, COPY.done, () => { this.page = "main"; });
-    this.sensorsPage.add(this.localizationGroup, this.lidarGroup);
+    this.sensorsPage.add(this.localizationGroup, this.lidarGroup, this.navMapGroup);
 
     const localize = button(this.localizationGroup, COPY.relocalize, 0, 0, CONTENT, ACTION_HEIGHT, handlers.onRealign);
-    button(this.settingsPage, COPY.setup, 0, 0.09, CONTENT, ACTION_HEIGHT, handlers.onRestart).userData.panelRow = "robotActions";
+    sectionHeading(this.localizationGroup, "Localization", 0.055);
+    button(this.settingsPage, "Restart setup", 0, 0.09, CONTENT, ACTION_HEIGHT, handlers.onRestart).userData.panelRow = "robotActions";
     this.handlersSpeed = handlers.manipulationSpeed ?? (() => 0.2);
     this.speedGroup.position.set(0, 0.025 / HEIGHT, 0);
     this.sensorsPage.add(this.speedGroup);
@@ -295,32 +299,41 @@ export class MainMenuView {
     sectionHeading(this.speedGroup, "Movement speed", 0.03);
     const speedValue = label(this.speedGroup, "50%", CONTENT / 2 - 0.09, 0.03, 0.18, 0.03, 21, C.ink, "right");
     sectionHeading(this.settingsPage, COPY.headset, -0.014).userData.panelRow = "headset";
-    const debugToggle = button(this.settingsPage, "Debug · Off", 0, -0.084, CONTENT, ACTION_HEIGHT, handlers.onDebug);
-    button(this.settingsPage, COPY.diagnostics, 0, -0.152, CONTENT, ACTION_HEIGHT, () => { this.page = "diagnostics"; }).userData.panelRow = "diagnostics";
-
-    const soundToggle = button(this.settingsPage, "Sound · On", 0, -0.228, CONTENT, ACTION_HEIGHT, () => handlers.onSound?.());
-
-    return { localize, speedValue, debugToggle, soundToggle };
+    const soundWidth = 0.075, buttonWidth = (CONTENT - soundWidth - 2 * GAP) / 2;
+    const debugToggle = button(this.settingsPage, "Debug · Off", -CONTENT / 2 + buttonWidth / 2, -0.084, buttonWidth, ACTION_HEIGHT, handlers.onDebug);
+    button(this.settingsPage, COPY.diagnostics, -CONTENT / 2 + buttonWidth * 1.5 + GAP, -0.084, buttonWidth, ACTION_HEIGHT, () => { this.page = "diagnostics"; }).userData.panelRow = "debug";
+    const soundX = CONTENT / 2 - soundWidth / 2;
+    const soundToggle = button(this.settingsPage, "", soundX, -0.084, soundWidth, ACTION_HEIGHT, () => handlers.onSound?.());
+    soundToggle.name = "Toggle sound";
+    const speaker = [[-.014,-.005],[-.008,-.005],[-.008,-.005],[0,-.012],[0,-.012],[0,.012],[0,.012],[-.008,.005],[-.008,.005],[-.014,.005],[-.014,.005],[-.014,-.005]] as const;
+    const onIcon = panelIcon([...speaker,[.005,-.007],[.009,0],[.009,0],[.005,.007],[.010,-.012],[.016,0],[.016,0],[.010,.012]]);
+    const offIcon = panelIcon([...speaker,[.005,-.008],[.015,.008],[.005,.008],[.015,-.008]]);
+    for (const icon of [onIcon, offIcon]) { icon.userData.panelRow = "debug"; icon.userData.followSurface = soundToggle; place(this.settingsPage, icon, soundX, -0.084, DIMOS_AR_DESIGN.depth.text); }
+    onIcon.name = "Sound on icon"; offIcon.name = "Sound off icon";
+    return { localize, speedValue, debugToggle, soundToggle, onIcon, offIcon };
   }
 
   private buildSensorsPage(handlers: MainMenuCallbacks) {
     label(this.sensorsPage, COPY.sensors, LEFT + 0.29, HEADER_Y, 0.56, 0.04, 28, C.ink, "left", "semibold");
     iconClose(this.sensorsPage, "Back from Sensors", () => { this.page = "main"; });
+    sectionHeading(this.navMapGroup, "Navigation", 0.055);
+    const mapToggle = button(this.navMapGroup, "Map · On", -0.23, 0, 0.33, ACTION_HEIGHT, () => handlers.onMapToggle?.());
+    const clickToggle = button(this.navMapGroup, "Navigation via map · On", 0.17, 0, 0.46, ACTION_HEIGHT, () => handlers.onMapClickToggle?.());
     sectionHeading(this.lidarGroup, "LiDAR", 0).userData.panelRow = "lidar";
     this.lidarTabs.push(...tabs(this.lidarGroup, ["Off", "Obstacles", "Full"], 0.17,
       [() => handlers.onLidarMode?.("off"), () => handlers.onLidarMode?.("obstacles"), () => handlers.onLidarMode?.("full")]));
-    const rangeLabel = label(this.lidarGroup, "Clearance", LEFT + 0.17, 0.08, 0.34, 0.035, 18, C.muted);
-    const rangeValue = label(this.lidarGroup, "0.6 m", 0.14, 0.08, 0.19, 0.04, 21, C.ink, "center");
-    const pointsValue = label(this.lidarGroup, "4000", 0.14, -0.01, 0.19, 0.04, 21, C.ink, "center");
-    label(this.lidarGroup, "Point limit", LEFT + 0.17, -0.01, 0.34, 0.035, 18, C.muted).userData.panelRow = "points";
-    for (const [row, y, action] of [["range", 0.08, handlers.onLidarRange], ["points", -0.01, handlers.onLidarPoints]] as const) {
-      for (const direction of [-1, 1]) {
-        const control = button(this.lidarGroup, direction < 0 ? "−" : "+", direction < 0 ? -0.015 : 0.31, y, 0.064, 0.064, () => action?.(direction));
-        control.userData.panelRow = row; this.sensorControls.push(control);
+    const rangeLabel = label(this.lidarGroup, "Clearance", -0.358, 0.08, 0.13, 0.035, 18, C.muted);
+    const rangeValue = label(this.lidarGroup, "0.6 m", -0.11, 0.08, 0.095, 0.04, 19, C.ink, "center");
+    const pointsValue = label(this.lidarGroup, "4000", 0.337, 0.08, 0.095, 0.04, 19, C.ink, "center");
+    label(this.lidarGroup, "Points", 0.075, 0.08, 0.09, 0.035, 18, C.muted).userData.panelRow = "range";
+    for (const [start, action] of [[-0.235, handlers.onLidarRange], [0.205, handlers.onLidarPoints]] as const) {
+      for (const [index, direction] of [-1, 1].entries()) {
+        const control = button(this.lidarGroup, direction < 0 ? "−" : "+", start + index * 0.066, 0.08, 0.056, 0.064, () => action?.(direction));
+        control.userData.panelRow = "range"; this.sensorControls.push(control);
       }
     }
     const sensorStatus = label(this.details, "", 0, -0.15, CONTENT, 0.1, 17, C.muted);
-    return { rangeLabel, rangeValue, pointsValue, sensorStatus };
+    return { rangeLabel, rangeValue, pointsValue, sensorStatus, mapToggle, clickToggle };
   }
 
   private buildRecoveryPage(handlers: MainMenuCallbacks) {
@@ -360,20 +373,27 @@ export class MainMenuView {
     this.speedGroup.visible = snap.manipulationAvailable === true;
     this.localizationGroup.visible = snap.localizationAvailable === true;
     this.lidarGroup.visible = snap.lidarAvailable;
-    const capabilityKey = [this.localizationGroup.visible,this.speedGroup.visible,this.lidarGroup.visible].join();
+    this.navMapGroup.visible = snap.navMapAvailable === true;
+    const capabilityKey = [this.localizationGroup.visible,this.speedGroup.visible,this.lidarGroup.visible,this.navMapGroup.visible].join();
     if (capabilityKey !== this.capabilityKey) {
       this.capabilityKey = capabilityKey;
       const rows: [string,number,number?][] = [];
-      if (this.localizationGroup.visible) rows.push(["localize",.064]);
+      if (this.localizationGroup.visible) rows.push(["localizeHeading",.03],["localize",.064]);
       if (this.speedGroup.visible) rows.push(["speed",.10]);
-      if (this.lidarGroup.visible) rows.push(["lidar",.03,.01],["tabs",.064,.01],["range",.064],["points",.064]);
+      if (this.navMapGroup.visible) rows.push(["navHeading",.03],["navMap",.064]);
+      if (this.lidarGroup.visible) rows.push(["lidar",.03,.01],["tabs",.064,.01],["range",.064]);
       if (!rows.length) rows.push(["empty",.03]);
       // Use the space below the header so all capabilities fit with the runtime footer gap.
-      this.capabilityProfile = runtimeProfile(.24, rows);
+      this.capabilityProfile = capabilityProfile(rows);
       this.fittedContent.set(this.capabilityBody, this.capabilityProfile.height);
       const r = this.capabilityProfile.rows;
       this.localizationGroup.position.y = (r.localize ?? 0)/HEIGHT;
+      const localizationHeading = this.localizationGroup.children.find(node => node.userData.sectionHeading);
+      if (localizationHeading) localizationHeading.position.y = ((r.localizeHeading ?? 0) - (r.localize ?? 0)) / HEIGHT;
       this.speedGroup.position.y = (r.speed ?? 0)/HEIGHT;
+      this.navMapGroup.position.y = (r.navMap ?? 0)/HEIGHT;
+      const navHeading = this.navMapGroup.children.find(node => node.userData.sectionHeading);
+      if (navHeading) navHeading.position.y = ((r.navHeading ?? 0) - (r.navMap ?? 0)) / HEIGHT;
       for (const node of this.lidarGroup.children) {
         const target = r[node.userData.panelRow];
         if (target !== undefined) node.position.y = target / HEIGHT;
@@ -413,7 +433,9 @@ export class MainMenuView {
     setText(this.pageViews.runtime.robotButton, robotBadgeText(snap.robotName, snap.robotConnectionText ?? "Disconnected", snap.robotSelected ?? false, snap.activity ?? "Idle"));
     this.pageViews.runtime.robotButton.setEnabled(snap.robotSelectable);
     this.pageViews.runtime.robotButton.setActive(snap.robotSelected);
-    setText(this.pageViews.settings.soundToggle, `Sound · ${this.soundEnabled() ? "On" : "Off"}`);
+    this.pageViews.settings.onIcon.visible = this.soundEnabled();
+    this.pageViews.settings.offIcon.visible = !this.soundEnabled();
+    this.pageViews.settings.soundToggle.userData.accessibilityLabel = this.soundEnabled() ? "Mute sound" : "Enable sound";
     this.pageViews.runtime.robotDot.material.color.set(toneCss(snap.connectionTone));
     setText(this.pageViews.settings.debugToggle, `Debug · ${snap.debugEnabled ? "On" : "Off"}`);
     this.pageViews.settings.debugToggle.setActive(snap.debugEnabled);
@@ -453,6 +475,11 @@ export class MainMenuView {
     this.pageViews.runtime.agent.setContent(speech?.response || snap.agentMessage || "", false, true);
     this.pageViews.runtime.agent.color(toneCss(speech?.severity === "error" ? "error" : speech?.severity === "warn" ? "warn" : "neutral"));
     const prefs = snap.lidarPreferences ?? { pointLimit: 4000, obstacleRangeM: 0.6, fullRangeM: 5 };
+    setText(this.pageViews.sensors.mapToggle, `Map · ${snap.navMapEnabled ? "On" : "Off"}`);
+    setText(this.pageViews.sensors.clickToggle, `Navigation via map · ${snap.navMapClickToWalk ? "On" : "Off"}`);
+    this.pageViews.sensors.mapToggle.setActive(snap.navMapEnabled === true);
+    this.pageViews.sensors.clickToggle.setActive(snap.navMapClickToWalk === true);
+    this.pageViews.sensors.clickToggle.setEnabled(snap.navMapEnabled === true && snap.navMapCanWalk === true);
     this.lidarTabs.forEach((tab, i) => { tab.setActive(i === ["off", "obstacles", "full"].indexOf(snap.lidarMode)); tab.setEnabled(snap.lidarAvailable); });
     this.sensorControls.forEach(control => control.setEnabled(snap.lidarAvailable && snap.lidarMode !== "off"));
     setText(this.pageViews.sensors.rangeLabel, snap.lidarMode === "obstacles" ? "Clearance" : "Range");
@@ -556,6 +583,14 @@ export class MainMenuView {
     this.fittedContent.set(this.wizardBody, profile.height);
   }
 
+  navigationMapDock(): { lowerEdge: THREE.Vector3; yaw: number } {
+    this.appearanceRoot.updateWorldMatrix(true, false);
+    const lowerEdge = this.appearanceRoot.localToWorld(
+      new THREE.Vector3(0, (PANEL_TOP - this.heightController.height) / HEIGHT, 0));
+    const facing = new THREE.Vector3(0, 0, 1).applyQuaternion(this.panel.getWorldQuaternion(new THREE.Quaternion()));
+    return { lowerEdge, yaw: Math.atan2(facing.x, facing.z) };
+  }
+
   presencePanel(): PresencePanel | null {
     if (!this.panelShown || !this.panel.visible || this.wizard.visible) return null;
     this.plate.updateWorldMatrix(true, false);
@@ -606,6 +641,7 @@ export class MainMenuView {
 
   ownsTarget(object: THREE.Object3D | undefined): boolean {
     for (let node = object; node; node = node.parent ?? undefined) {
+      if (node.userData.navigationMapDock === true) return false;
       if (node === this.panel) return true;
     }
     return false;
@@ -689,7 +725,7 @@ export class MainMenuView {
     return object === this.pageViews.runtime.inputField.mesh && this.pageViews.runtime.inputField.enabled;
   }
 
-  canInteract(object: THREE.Object3D, point: THREE.Vector3): boolean {
+  canInteract(object: THREE.Object3D, _point: THREE.Vector3): boolean {
     if (object.userData.interactionEnabled === false) return false;
     if (object.userData.manipulationSpeedSlider) return this.speedGroup.visible;
     for (let node: THREE.Object3D | null = object; node && node !== this.panel; node = node.parent) {
@@ -698,7 +734,7 @@ export class MainMenuView {
     const scroll = this.scrollView(object);
     if (scroll) return scroll.maxScroll > 0;
     if (object === this.barZone || object === this.cornerZones.left || object === this.cornerZones.right) return true;
-    if (object === this.plate) return this.appearanceRoot.worldToLocal(point.clone()).y > 0.25 / HEIGHT;
+    if (object === this.plate) return true;
     return false;
   }
 
@@ -732,7 +768,7 @@ export class MainMenuView {
       local.y < bottom + u(0.05) && local.y > bottom - u(0.045);
     const bar = Math.abs(local.x) < u(0.11) && local.y < bottom && local.y > bottom - u(0.05);
     const resize = corner && !grip;
-    const move = !resize && (bar || (inside && (grip || local.y > u(0.25))));
+    const move = !resize && (bar || inside);
     if (!resize && !move) return false;
     const anchor = this.appearanceRoot.localToWorld(new THREE.Vector3(resize ? -Math.sign(local.x) * halfWidth : 0, resize ? top : 0, 0));
     this.manipulation = {

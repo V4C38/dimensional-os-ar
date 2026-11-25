@@ -9,6 +9,8 @@ Run `npm ci`, then `npm run dev` for HTTPS development. `npm run build` checks t
 
 The browser service and ARModule have independent lifetimes. The shipped browser page uses the service's same-origin `/ar` backend route and paired bulk proxy; it has no remote PIN entry flow. The server-side PIN gateway remains available to explicit API consumers. Multiple clients can connect to the same backend; ARModule grants editing authority separately.
 
+The navigation map subscribes while it is open and supports hand and controller interaction for goals, panning, scaling and recentering. The shared bulk transport reuses acknowledged occupancy grids when only dynamic map data changes. Go2 recording replay can display a map without enabling live navigation motion.
+
 For physical XR use, trust the HTTPS certificate on the headset and ensure it can reach the browser service on the LAN. Supported headset profiles are Quest 3 and Quest 3S. Browser fixtures verify application behavior, not physical tracking, camera quality, or device performance.
 
 ## Quest microphone checks

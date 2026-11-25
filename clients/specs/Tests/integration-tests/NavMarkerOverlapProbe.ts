@@ -92,7 +92,7 @@ export class ReviewScenario extends BaseScriptComponent {
         manipulation: { available: false, reason: "No arm" },
         object_detection: { available: false, reason: "No detector" },
         lidar: available, localization: available, estop: available, agent: available,
-        navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hands" } } } });
+        navigation: { ...available, nav_goal: { ...available, preview: true }, nav_joystick: { available: false, reason: "Hands" }, nav_map: { available: false, reason: "Map unavailable" } } } });
     this.peer.reset();
     this.wire({ type: "state", server: { connected_clients: 1 },
       lidar: { enabled: false, min_height_m: -10, max_height_m: 10, max_range_m: 5 },

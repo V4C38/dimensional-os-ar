@@ -636,7 +636,8 @@ async def run_review(context: ReviewContext) -> dict[str, Any]:
         write_json(directory / "results.json", result)
         passes.append(result)
     if args.suite == "all":
-        for name, harness in (("manipulation", "ManipulationProbe.ts"), ("overlap", "NavMarkerOverlapProbe.ts"), ("presence", "PresenceProbe.ts")):
+        for name, harness in (("manipulation", "ManipulationProbe.ts"), ("overlap", "NavMarkerOverlapProbe.ts"),
+                              ("presence", "PresenceProbe.ts"), ("navigation-map", "NavigationMapProbe.ts")):
             directory = output / name
             directory.mkdir()
             child = context.for_pass("probe", harnesses / harness, project, directory)
@@ -952,14 +953,6 @@ def _run(args: ReviewOptions) -> int:
 
 def main() -> int:
     args = arguments()
-    if not args.prepare_only:
-        pressure = subprocess.check_output(
-            ["sysctl", "-n", "kern.memorystatus_vm_pressure_level"], text=True
-        )
-        if int(pressure.strip()) >= 2:
-            print("Native review not started: macOS reports elevated memory pressure. "
-                  "Close heavy applications before starting Lens Studio tests.", file=sys.stderr)
-            return 2
     guard = contextlib.nullcontext() if args.prepare_only else KeepAwake()
     with guard:
         return _run(args)

@@ -27,6 +27,7 @@ import { WebXRARMarkerPresenter } from "./presentation/WebXRARMarkerPresenter";
 import { WebXRLidarRenderer } from "./sensors/WebXRLidarRenderer";
 import { WebXRRobotPresenter } from "./presentation/WebXRRobotPresenter";
 import { WebXRRouteRenderer } from "./navigation/WebXRNavigationRenderer";
+import type { NavigationMapPorts } from "./navigation/WebXRNavigationMap";
 import { WebXRUIPresenter } from "./presentation/WebXRUIPresenter";
 
 type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
@@ -34,6 +35,7 @@ type ClientTrackingOrigin = ReadonlyFacts<MutableClientTrackingOrigin>;
 type WebXRCameraPort = Pick<HmdCameraSource, "samplePose" | "cameraOptical" | "start" | "stop" | "capture" | "clearTracking" | "availabilityError" | "previewFrame" | "dispose"> & Partial<Pick<HmdCameraSource, "trackingPosition">>;
 
 export interface DimOSWebXRClientDeps {
+  clientName?: () => string;
   transport: BindableWebSocketTransport;
   clock: ClientClock;
   camera: WebXRCameraPort;
@@ -83,6 +85,7 @@ export class DimOSWebXRClient {
       transport: deps.transport,
       clock: deps.clock,
       clientTrackingOriginStore: this.originStore,
+      clientName: deps.clientName,
     });
     this.transport.bind({
       onTransportOpen: () => this.session.onTransportOpen(),
@@ -254,6 +257,31 @@ export class DimOSWebXRClient {
   }
 
   cameraPreview(): ReturnType<HmdCameraSource["previewFrame"]> { return this.camera.previewFrame(); }
+
+  readonly navigationMapPorts: NavigationMapPorts = {
+    view: () => this.session.view().navigationMap,
+    robotDescription: () => this.session.view().hello?.robot ?? null,
+    setViewport: viewport => this.session.setNavigationMapViewport(viewport),
+    submit: position => this.session.submitNavigationMapGoal(position),
+    cancelPending: () => this.session.cancelPendingNavigationMapGoal(),
+    error: message => this.notifications.show({ text: message, tone: "warning", glyph: "warning", priority: 70 }),
+    feedback: (text, pending) => this.notifications.show({
+      text, tone: pending ? "neutral" : "success", glyph: pending ? "busy" : "check", priority: 70,
+    }),
+  };
+
+  navigationMapAvailable(): boolean {
+    const view = this.session.view();
+    return view.connection === "ready" && view.capabilities?.navigation.nav_map.available === true;
+  }
+
+  navigationMapCanSend(): boolean {
+    const view = this.session.view();
+    const authority = this.session.collaboration.snapshot();
+    return this.navigationMapAvailable() && this.navigationControlsEnabled() &&
+      view.capabilities?.navigation.nav_goal.available === true && view.state?.safety?.stopped !== true &&
+      !authority.blocked;
+  }
 
   isRobotSelected(): boolean { return this.selection.isSelected(); }
 

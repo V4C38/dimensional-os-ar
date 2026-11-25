@@ -772,3 +772,19 @@ it("requires a shared frame identity for every localization status", () => {
     expect(() => decodeOutbound(JSON.stringify({ ...status, ...changes }))).toThrow();
   }
 });
+
+it("decodes Go2 replay map capability independently of motion navigation", () => {
+  const disabled = { available: false, reason: "Recording playback is read-only" };
+  const message = { ...HELLO_FIXTURE, capabilities: { ...HELLO_FIXTURE.capabilities, navigation: {
+    ...disabled, nav_goal: { ...disabled, preview: false }, nav_joystick: disabled,
+    nav_map: { available: true, reason: null },
+  } } };
+  expect(decodeOutbound(JSON.stringify(message))).toMatchObject({
+    capabilities: { navigation: message.capabilities.navigation },
+  });
+});
+
+it("includes the selected headset name in the hello request", () => {
+  expect(JSON.parse(encodeHelloRequest({ ts_client: 1, client_name: "Quest 3S" })))
+    .toMatchObject({ client_name: "Quest 3S" });
+});

@@ -93,6 +93,7 @@ export class WebXRApp extends xb.Script {
     this.client.session.presence.publish(() => ({ pointers: this.interaction?.presencePointers() ?? [], panel: this.mainMenu?.presencePanel() ?? null }));
     this.presence.update(this.client.session.presence.snapshot());
   }
+  override onSelect(event: xb.SelectEvent): void { this.inputController.onSelect(event); }
   override onSelectStart(event: xb.SelectEvent): void { this.inputController.onSelectStart(event); }
   override onSelectEnd(event: xb.SelectEvent): void { this.inputController.onSelectEnd(event); }
   override onSqueezeStart(event: xb.SelectEvent): void { this.inputController.onSqueezeStart(event); }
