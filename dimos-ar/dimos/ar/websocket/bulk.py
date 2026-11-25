@@ -234,6 +234,8 @@ class BulkPeer:
         self.navigation_map_request: NavigationMapRequest | None = None
         self._navigation_map: tuple[dict[str, Any], bytes] | None = None
         self._last_navigation_map: tuple[dict[str, Any], bytes] | None = None
+        self._acknowledged_map_grid: str | None = None
+        self._offered_map_grid: tuple[str, str] | None = None
         self._last_sensor = "navigation_map"
         self._serial = 0
         self._wake = asyncio.Event()
@@ -279,13 +281,26 @@ class BulkPeer:
                 return
         elif not request.enabled:
             return
+        if not request.enabled or current is None or current.subscription_id != request.subscription_id:
+            self._acknowledged_map_grid = None
+            self._offered_map_grid = None
         self.navigation_map_request = request if request.enabled else None
         self._navigation_map = self._last_navigation_map = None
 
+    def acknowledge_navigation_map_grid(self, subscription_id: str, grid_id: str) -> None:
+        request = self.navigation_map_request
+        if request and request.subscription_id == subscription_id and self._offered_map_grid == (subscription_id, grid_id):
+            self._acknowledged_map_grid = grid_id
+
     def navigation_map(self, request: NavigationMapRequest, header: dict[str, Any], data: bytes) -> None:
         if self.navigation_map_request is request and len(data) <= MAX_BULK_RECORD_BYTES:
+            cell_count = header["width"] * header["height"]
+            identity = [header["odom_reference_id"], header["source_generation"], header["width"],
+                        header["height"], header["resolution"], header["origin"]]
+            grid_id = hashlib.sha256(dumps(identity).encode() + data[:cell_count]).hexdigest()
+            header = {**header, "grid_id": grid_id}
             comparable = {key: value for key, value in header.items() if key != "snapshot_sequence"}, data
-            if comparable == self._last_navigation_map:
+            if comparable == self._last_navigation_map and self._acknowledged_map_grid == grid_id:
                 return
             self._last_navigation_map = comparable
             self._navigation_map = (header, data)
@@ -341,7 +356,13 @@ class BulkPeer:
                 ):
                     (header, payload), self._navigation_map = self._navigation_map, None
                     self._last_sensor = "navigation_map"
-                    await self._send_binary("navigation_map", header, payload)
+                    included = self._acknowledged_map_grid != header["grid_id"]
+                    if included:
+                        self._acknowledged_map_grid = None
+                        self._offered_map_grid = (header["subscription_id"], header["grid_id"])
+                    else:
+                        payload = payload[header["width"] * header["height"]:]
+                    await self._send_binary("navigation_map", {**header, "grid_included": included}, payload)
                 elif self._lidar is not None:
                     (header, payload), self._lidar = self._lidar, None
                     self._last_sensor = "lidar"

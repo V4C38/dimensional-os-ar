@@ -3,7 +3,8 @@
 // non-busy admission. These semantics require no extra wire fields (PROTOCOL.md).
 // interaction_request.takeover reuses acquire fields and awaits a stopped native
 // agent before granting a manual navigation lease; cancel_acquire retires it.
-// Navigation-map bulk frame metadata is validated by the bulk codec.
+// Navigation-map bulk frames identify reusable grids; the bulk codec acknowledges
+// accepted keyframes with navigation_map_grid_ack on the bulk connection.
 import { utf8Bytes, validatedBulkArray } from "./BulkTransfer";
 import { decodeManipulation, decodeFollowingTail } from "../manipulation/ManipulationProtocol";
 import { type InteractionState, type InteractionResult, type InteractionAuthority, type InteractionTarget, type InteractionCredentials, CAPABILITY_NAMES, type Capabilities, type Capability, type CapturePolicy, type DistortionModel, type Intrinsics, type Lidar, type LidarSettings, type LocalizationObservation, type LocalizationObservations, type LocalizationObservationsRequest, type LocalizationResult, type SharedFrameContext, type LocalizationStatus, type NavGoal, type NavState, type Outbound, type Pose, type Quat, type RobotDescription, type State, type TimeSync, type Vec3, type YawPose, type Hello, type HelloRequest, type AgentMessage, type AgentSkill, type NavigationCapability } from "../ClientContracts";

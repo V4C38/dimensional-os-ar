@@ -190,9 +190,12 @@ class NavigationMapFeed:
     async def _publish(self) -> None:
         if not self._available() or self._grid is None:
             return
-        peers = [(peer, peer.navigation_map_request) for peer in self._peers()]
+        peers = [(peer, request) for peer in self._peers()
+                 if (request := peer.navigation_map_request) is not None]
+        if not peers:
+            return
         pose = self._pose()
-        if not peers or pose is None:
+        if pose is None:
             return
         robot = (*pose.position[:2], quaternion_yaw(pose.orientation))
         grid, geometry, reset, identity = self._grid, self._geometry(), self._reset, self._identity()
@@ -210,10 +213,12 @@ class NavigationMapFeed:
         def encode() -> list[tuple[BulkPeer, NavigationMapRequest, dict[str, Any], bytes]]:
             heights = _height_points(cloud, (robot[0], robot[1]))
             result = []
+            crops: dict[tuple[XY, float], tuple[dict[str, Any], bytes] | None] = {}
             for peer, request in peers:
-                if request is None:
-                    continue
-                encoded = _encode_crop(grid, request.center or robot[:2], robot, heights, geometry, request.radius_m)
+                key = (request.center or robot[:2], request.radius_m)
+                if key not in crops:
+                    crops[key] = _encode_crop(grid, key[0], robot, heights, geometry, key[1])
+                encoded = crops[key]
                 if encoded is not None:
                     result.append((peer, request, *encoded))
             return result

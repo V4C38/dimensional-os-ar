@@ -83,6 +83,7 @@ export class BulkTransfer {
   private upload: { id: number; kind: "localization" | "speech"; data: Uint8Array; offset: number; started: number; admitted: boolean } | null = null;
   private lastUploadResult: BulkUploadResult | null = null;
   private download: { id: number; bytes: Uint8Array; offset: number; started: number; shared_frame_id: string; sourceGeneration?: number; map?: NavigationMapHeader } | null = null;
+  private mapGrid: { key: string; cells: NavigationMapSnapshot["cells"] } | null = null;
   private deadline = 0;
   private generation = 0;
   private lastProgressAt = 0;
@@ -110,6 +111,7 @@ export class BulkTransfer {
     this.generation++; this.port?.close(); this.port = null; this.ready = false; this.epoch = "";
     this.records = []; this.queueBytes = 0; this.entries.clear(); this.wanted.clear(); this.unavailable.clear(); this.ignored.clear(); this.pins.clear(); this.cacheBytes = 0;
     this.upload = this.download = null; this.deadline = 0;
+    this.mapGrid = null;
     this.lastUploadResult = null; this.lastProgressAt = 0;
   }
   setSharedFrame(sharedFrame: string): void {
@@ -300,6 +302,10 @@ export class BulkTransfer {
       this.download = { id: Number(raw.id), bytes: new Uint8Array(Number(raw.total_bytes)), offset: 0,
         started: this.clock.now(), shared_frame_id: String(raw.shared_frame_id),
         sourceGeneration: raw.source_generation as number | undefined, map };
+      if (map && Number(raw.total_bytes) === 0) {
+        this.download = null;
+        this.finishNavigationMap(map, new Uint8Array(0));
+      }
       return;
     }
     if (raw.type !== "bulk_record") throw new Error("Unknown bulk frame");
@@ -359,11 +365,7 @@ export class BulkTransfer {
       if (download.offset === download.bytes.length) {
         this.download = null;
         if (download.map) {
-          if (!this.wantsNavigationMap?.(download.map)) return;
-          let snapshot: NavigationMapSnapshot;
-          try { snapshot = decodeNavigationMap(download.map, download.bytes); }
-          catch (error) { this.dropNavigationMap(error); return; }
-          this.navigationMap?.(snapshot);
+          this.finishNavigationMap(download.map, download.bytes);
         } else this.lidar(download.bytes, download.sourceGeneration);
       }
     } catch (error) { this.fail(error instanceof Error ? error.message : String(error)); }
@@ -414,6 +416,21 @@ export class BulkTransfer {
     this.counters.dropped++;
     this.invalidNavigationMap?.(error);
   }
+  private finishNavigationMap(header: NavigationMapHeader, bytes: Uint8Array): void {
+    if (!this.wantsNavigationMap?.(header)) return;
+    const previous = this.mapGrid;
+    const key = JSON.stringify([header.subscription_id, header.grid_id, header.odom_reference_id,
+      header.source_generation, header.width, header.height, header.resolution, header.origin]);
+    try {
+      const cells = previous?.key === key ? previous.cells : undefined;
+      const snapshot = decodeNavigationMap(header, bytes, cells);
+      if (header.grid_included) {
+        this.mapGrid = { key, cells: snapshot.cells };
+        this.send({ type: "navigation_map_grid_ack", subscription_id: header.subscription_id, grid_id: header.grid_id });
+      }
+      this.navigationMap?.(snapshot);
+    } catch (error) { this.dropNavigationMap(error); }
+  }
   private fail(reason: string): void { this.reset(); this.failed(reason); }
 }
 
@@ -421,6 +438,8 @@ export class BulkTransfer {
 export type NavigationMapHeader = Omit<NavigationMapSnapshot, "cells" | "heights" | "route"> & {
   height_count: number;
   route_count: number;
+  grid_id: string;
+  grid_included: boolean;
 };
 
 export function decodeNavigationMapHeader(data: Record<string, unknown>): NavigationMapHeader {
@@ -447,7 +466,8 @@ export function decodeNavigationMapHeader(data: Record<string, unknown>): Naviga
   if (typeof resolution !== "number" || !Number.isFinite(resolution) || resolution <= 0) throw new Error("Invalid navigation map resolution");
   const width = bounded("width", 1, 240), height = bounded("height", 1, 240);
   const height_count = bounded("height_count", 0, 128), route_count = bounded("route_count", 0, 256);
-  if (data.total_bytes !== width * height + height_count * 12 + route_count * 16) {
+  if (typeof data.grid_included !== "boolean" || typeof data.grid_id !== "string" || !/^[0-9a-f]{64}$/.test(data.grid_id)) throw new Error("Invalid navigation map grid identity");
+  if (data.total_bytes !== (data.grid_included ? width * height : 0) + height_count * 12 + route_count * 16) {
     throw new Error("Invalid navigation map payload length");
   }
   return {
@@ -458,33 +478,38 @@ export function decodeNavigationMapHeader(data: Record<string, unknown>): Naviga
     shared_frame_id: stringField("shared_frame_id"),
     map_odom_rotation,
     source_generation: bounded("source_generation", 0, Number.MAX_SAFE_INTEGER),
-    width, height, resolution, height_count, route_count,
+    width, height, resolution, height_count, route_count, grid_id: data.grid_id, grid_included: data.grid_included,
     origin: vector("origin", 2),
     robot: vector("robot", 3),
     target: data.target === null ? null : vector<readonly [number, number]>("target", 2),
   };
 }
 
-export function decodeNavigationMap(header: NavigationMapHeader, bytes: Uint8Array): NavigationMapSnapshot {
-  const { height_count, route_count, ...metadata } = header;
+export function decodeNavigationMap(header: NavigationMapHeader, bytes: Uint8Array, previousCells?: NavigationMapSnapshot["cells"]): NavigationMapSnapshot {
+  const { height_count, route_count, grid_included, grid_id: _gridId, ...metadata } = header;
   const cellCount = metadata.width * metadata.height;
-  if (bytes.byteLength !== cellCount + 12 * height_count + 16 * route_count) {
+  const gridBytes = grid_included ? cellCount : 0;
+  if (bytes.byteLength !== gridBytes + 12 * height_count + 16 * route_count) {
     throw new Error("Invalid navigation map payload length");
   }
-  const wireCells = new Int8Array(bytes.buffer, bytes.byteOffset, cellCount);
-  const displayCells = new Uint8Array(cellCount);
-  for (let i = 0; i < cellCount; i++) {
-    const cost = wireCells[i];
-    if (cost < -1 || cost > 100) throw new Error("Invalid navigation map cost");
-    displayCells[i] = cost + 1;
+  let cells = previousCells;
+  if (grid_included) {
+    const wireCells = new Int8Array(bytes.buffer, bytes.byteOffset, cellCount);
+    const displayCells = new Uint8Array(cellCount);
+    for (let i = 0; i < cellCount; i++) {
+      const cost = wireCells[i];
+      if (cost < -1 || cost > 100) throw new Error("Invalid navigation map cost");
+      displayCells[i] = cost + 1;
+    }
+    cells = Object.freeze({
+      length: cellCount,
+      costAt: (index: number) => displayCells[index] === undefined ? undefined : displayCells[index] - 1,
+      copyDisplayBytes: (destination: Uint8Array) => { destination.set(displayCells); },
+    });
   }
-  const cells = Object.freeze({
-    length: cellCount,
-    costAt: (index: number) => displayCells[index] === undefined ? undefined : displayCells[index] - 1,
-    copyDisplayBytes: (destination: Uint8Array) => { destination.set(displayCells); },
-  });
+  if (!cells || cells.length !== cellCount) throw new Error("Missing acknowledged navigation map grid");
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  let offset = cellCount;
+  let offset = gridBytes;
   const next = (): number => {
     const value = view.getFloat32(offset, true);
     offset += 4;

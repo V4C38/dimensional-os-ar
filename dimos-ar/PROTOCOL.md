@@ -965,10 +965,11 @@ The `bulk_binary_begin` envelope uses `kind:"navigation_map"` with standard
 `source_generation`, `shared_frame_id`, `map_odom_rotation` (unit quaternion
 `[x,y,z,w]` rotating native odometry into the shared map frame), dimensions (`width`, `height`), metres-per-cell
 `resolution`, `origin:[x,y]`, `robot:[x,y,yaw]`, `target:[x,y] | null`,
-`height_count` and `route_count`. Positions are in native odometry metres, and
-yaw is in radians. Standard ARB2 chunks carry these concatenated bytes:
+`height_count`, `route_count`, `grid_id` (64 lowercase hex characters) and
+`grid_included` (boolean). Positions are in native odometry metres, and yaw is
+in radians. Standard ARB2 chunks carry these concatenated bytes:
 
-1. `width * height` signed 8-bit costs in row-major order with X increasing
+1. When `grid_included` is true, `width * height` signed 8-bit costs in row-major order with X increasing
    within a row and Y increasing between rows. The origin is the lower corner
    of cell (0, 0). Cost `-1` is unknown, `0` is free and `1..100` are graded costs.
 2. `height_count` little-endian float32 `[x,y,z]` samples.
@@ -978,6 +979,15 @@ Dimensions are at most 240 cells each. Height and route counts are at most
 128 and 256, respectively. The payload is at most 64 KiB and the server
 tracks one replaceable pending map snapshot per subscriber. A changed
 subscription, source, or older snapshot sequence retires the old sample.
+
+After accepting a full grid, the client sends
+`{type:"navigation_map_grid_ack",subscription_id,grid_id}` on the bulk lane.
+The server sends the full grid until that identity is acknowledged. Subsequent
+frames with the same grid identity omit the cell bytes and reuse the client's
+cached immutable grid; their dynamic heights and route remain complete snapshots.
+The identity covers native frame, source generation, grid geometry and cell bytes.
+Changing a grid or subscription, reconnecting, or receiving no valid acknowledgement
+requires a full grid again. Empty dynamic frames use a zero-byte payload.
 
 A live map goal uses the standard `interaction_request` acquire and confirm
 exchange. Acquire `navigation_planning` with `source_id:"navigation-map"`,

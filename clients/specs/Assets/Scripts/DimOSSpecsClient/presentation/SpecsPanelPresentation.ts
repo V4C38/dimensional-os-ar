@@ -13,6 +13,10 @@ export const PANEL_GEOMETRY = { width: 90, maximumHeight: 76, top: 38, gap: 2, s
 export function panelProfile(startY: number, rows: readonly LayoutRow[], footer = true): PanelProfile {
   return layoutPanelRows(startY, rows, { ...PANEL_GEOMETRY, quantum: 1 }, footer);
 }
+/** Fit all supported capability sections below the fixed native header. */
+export function capabilityPanelProfile(rows: readonly LayoutRow[]): PanelProfile {
+  return layoutPanelRows(26.5, rows, { ...PANEL_GEOMETRY, gap: 1, quantum: 1 }, true, 1);
+}
 export function panelContentOffset(height: number): number { return (height - PANEL_GEOMETRY.maximumHeight) / 2; }
 export function panelFooterY(height: number): number {
   return PANEL_GEOMETRY.top - height + PANEL_GEOMETRY.bottom + PANEL_GEOMETRY.action / 2;
@@ -22,7 +26,7 @@ export function easePanel(t: number): number { const p = Math.max(0, Math.min(1,
 export const RUNTIME_LAYOUTS = {
   manual: panelProfile(14.6, [["guidance", 18], ["status", 1.8]]),
   agent: panelProfile(14.6, [["draft", 12], ["actions", 6.4], ["reply", 12], ["status", 1.8]]),
-  settings: panelProfile(23, [["robotActions",6.4],["headset",3],["debug",6.4,1],["diagnostics",6.4],["sound",6.4]]),
+  settings: panelProfile(23, [["robotActions",6.4],["headset",3],["debug",6.4,1]]),
   sensors: panelProfile(11.2, [["range", 6.4], ["points", 6.4], ["statistics", 10, 3]]),
   diagnostics: panelProfile(23, [["logs", 26], ["statistics", 10]]),
   alignment: panelProfile(23, [["guidance", 7], ["actions", 6.4]]),

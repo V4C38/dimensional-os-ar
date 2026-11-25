@@ -85,7 +85,7 @@ export class V2BulkPeer {
       id, total_bytes: data.length, subscription_id: request.subscription_id, sequence: request.sequence,
       snapshot_sequence: ++this.mapSerial, odom_reference_id: "fixture-odom", source_generation: 0, shared_frame_id: "fixture-shared", map_odom_rotation: [0, 0, 0, 1],
       width, height, resolution, origin: [x - 6, y - 6], robot: [0, 0, 0],
-      height_count: 1, route_count: target ? 1 : 0, target });
+      height_count: 1, route_count: target ? 1 : 0, target, grid_included: true, grid_id: "a".repeat(64) });
     for (const packet of fixtureBinaryPackets(data, id)) this.socket!.send(Buffer.from(packet));
   }
 

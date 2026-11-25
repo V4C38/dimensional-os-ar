@@ -27,6 +27,10 @@ export interface SpecsUISnapshot {
   lidarMode: LidarDisplayMode;
   lidarPreferences: LidarDisplayPreferences;
   lidarReceived: number;
+  navMapAvailable?: boolean;
+  navMapEnabled?: boolean;
+  navMapClickToWalk?: boolean;
+  navMapCanWalk?: boolean;
   debugEnabled: boolean;
   debugText: string;
   resumeOperation?: boolean;

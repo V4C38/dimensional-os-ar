@@ -49,6 +49,16 @@ HUMAN_INPUT_MAX_CHARS = 4000
 NAV_JOYSTICK_MAX_DURATION_S = 2.0
 
 
+def decode_navigation_map_grid_ack(data: dict[str, Any]) -> tuple[str, str]:
+    """Validate the bulk-lane acknowledgement of an accepted map grid."""
+    subscription_id = required_identifier(data.get("subscription_id"), "subscription_id")
+    grid_id = data.get("grid_id")
+    if (not isinstance(grid_id, str) or len(grid_id) != 64
+            or any(char not in "0123456789abcdef" for char in grid_id)):
+        raise ValueError("invalid navigation map grid acknowledgement")
+    return subscription_id, grid_id
+
+
 class ManipulationProtectionState(TypedDict, total=False):
     """Additive, read-only motor protection facts in manipulation_state."""
 
@@ -172,6 +182,7 @@ class LidarSettingsRequest(LidarSettings):
 
 @dataclass(frozen=True)
 class NavigationMapRequest:
+    """Control-lane viewport; grid acknowledgements travel on the bulk lane."""
     subscription_id: str
     sequence: int
     enabled: bool

@@ -350,6 +350,10 @@ export class ReviewScenario extends BaseScriptComponent {
     }
     if (this.profile === "golden" || step.id === "navigation_failure") scene();
     else this.after(3, scene);
+    if (step.id === "setup_entry") this.after(0.5, () => this.emit({
+      type: "host", action: "update_framing", aspect: (this.root.cameraObject.getComponent("Component.Camera") as Camera).aspect,
+      bounds: this.captureBounds(step.id),
+    }));
   }
   lidar(): void {
     const count = CATALOG.fixtures.pointLimit, bytes = new Uint8Array(16 + count * 12), view = new DataView(bytes.buffer);
@@ -393,6 +397,8 @@ export class ReviewScenario extends BaseScriptComponent {
     const screen = points.map(point => camera.worldSpaceToScreenSpace(point));
     const xs = screen.map(point => point.x), ys = screen.map(point => point.y);
     const left = Math.min(...xs), right = Math.max(...xs), top = Math.min(...ys), bottom = Math.max(...ys);
+    if (!Number.isFinite(left + right + top + bottom) || right - left < 0.05 || bottom - top < 0.05)
+      return { x: 0, y: 0, width: 1, height: 1 };
     const padX = (right - left) * 0.075, padY = (bottom - top) * 0.075;
     const x = Math.max(0, left - padX), y = Math.max(0, top - padY);
     return { x, y, width: Math.min(1, right + padX) - x, height: Math.min(1, bottom + padY) - y };

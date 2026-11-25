@@ -1,7 +1,8 @@
 import type { LocalizationContext, ReadonlyFacts } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 import type { ClientTrackingOriginStore } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import type { LocalizationCaptureEpisode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/LocalizationCaptureEpisode";
-import { OperatingModeController, localizationCaptureStatus, deriveSessionLinkPhase, robotConnectionLabel, Go2RecoveryReview, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { OperatingModeController, isManualControlEnabled, localizationCaptureStatus, deriveSessionLinkPhase, robotConnectionLabel, Go2RecoveryReview, sessionLinkTransitionLog, type SessionLinkPhase } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/ControlPanelPresentation";
+import { inversePose, multiplyRotation, rotateVecByQuat } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { SetupFlow } from "DimOSARClient.lspkg/Scripts/DimOSARClient/presentation/SetupFlow";
 import { deriveRobotMarkerApplyInput, getRobotActivityState, type RobotSelection } from "DimOSARClient.lspkg/Scripts/DimOSARClient/robot/RobotPresentation";
 
@@ -23,6 +24,9 @@ import type { SpecsTextToSpeech } from "../agent/SpecsSpeechAdapters";
 import { getFrameComponent,isFrameInitialized,placePanelInFront,statusToneColor } from "./UIKit";
 import { HudMessageController } from "./HudMessageController";
 import { WristMenuController } from "./WristMenuController";
+import { SpecsMapSession } from "../navigation/SpecsMapGesture";
+import { SpecsNavigationMapView } from "../navigation/SpecsNavigationMapView";
+import { SpecsNavigationMapInput } from "../navigation/SpecsNavigationMapInput";
 
 const EDITOR_MENU_SCALE = RUNTIME_PANEL_SCALE;
 const SPECTACLES_MENU_SCALE = RUNTIME_PANEL_SCALE;
@@ -35,7 +39,7 @@ type SetUIStateOptions = {
 };
 
 export interface UIPresenterDeps {
-  session: Pick<ARModuleSession, "view" | "start" | "stop" | "sendText" | "requestState" | "requestResumeOperation" | "collaboration" | "subscribeView">;
+  session: Pick<ARModuleSession, "view" | "start" | "stop" | "sendText" | "requestState" | "requestResumeOperation" | "collaboration" | "subscribeView" | "setNavigationMapViewport" | "submitNavigationMapGoal" | "cancelPendingNavigationMapGoal" | "requestNavigationCancellation">;
   episode: LocalizationCaptureEpisode;
   transport: Pick<SpecsWebSocketTransport, "setUrl">;
   clientTrackingOriginStore: ClientTrackingOriginStore;
@@ -78,6 +82,12 @@ export class UIPresenter extends BaseScriptComponent {
   private setupWizardController: SetupWizardController | null = null;
   presencePanel() { return this.isSetupCompleted() ? this.mainMenuView?.presencePanel() ?? null : null; }
   private mainMenuView: MainMenuView | null = null;
+  private navigationMap: SpecsMapSession | null = null;
+  private navigationMapView: SpecsNavigationMapView | null = null;
+  private navigationMapInput: SpecsNavigationMapInput | null = null;
+  private navMapEnabled = true;
+  private navMapClickToWalk = true;
+  private initialMapHeading: number | null = null;
   private uiLogger = new HudMessageController();
   private wristMenuController: WristMenuController | null = null;
   private uiState = -1;
@@ -166,6 +176,7 @@ export class UIPresenter extends BaseScriptComponent {
     this.uiLogger.tick();
     this.deps?.speechController?.tick();
     if (!this.setupCompleted) {
+      this.suspendNavigationMap();
       this.syncLidarSelection();
       return;
     }
@@ -174,6 +185,7 @@ export class UIPresenter extends BaseScriptComponent {
     this.refreshRobotLabels();
     this.mainMenuView?.apply(this.snapshot());
     this.mainMenuView?.tick(dt);
+    this.tickNavigationMap();
   }
 
   public onSessionView(view: ARModuleSessionState, prevView: ARModuleSessionState | null): void {
@@ -244,9 +256,12 @@ export class UIPresenter extends BaseScriptComponent {
       operatingMode: this.getOperatingMode(), agentAvailable: view.capabilities?.agent.available === true,
       speech: deps.speechController?.snapshot() ?? null,
       lidarAvailable: view.capabilities?.lidar.available === true, lidarMode: this.getLidarMode(),
+      navMapAvailable: view.capabilities?.navigation.nav_map.available === true,
+      navMapEnabled: this.navMapEnabled, navMapClickToWalk: this.navMapClickToWalk,
+      navMapCanWalk: view.capabilities?.navigation.nav_goal.available === true,
       lidarPreferences: { ...this.getLidarPreferences() }, lidarReceived: view.lidar?.points.length ?? 0,
       debugEnabled: this.getDebugMode(),
-      debugText: diagnosticsVisible ? `Arm capture: ${deps.manipulationDiagnostics?.() ?? "—"}\nPlayback: ${JSON.stringify(view.state?.playback ?? null)}\nLocalization timings: ${JSON.stringify(deps.episode.timing())}\nConnection: ${view.connection}\nLocalized: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture?.text}\n${deps.episode.view().lastError ?? ""}` : "",
+      debugText: diagnosticsVisible ? `Arm capture: ${deps.manipulationDiagnostics?.() ?? "—"}\nMap: ${JSON.stringify(this.navigationMapView?.diagnostics() ?? null)}\nPlayback: ${JSON.stringify(view.state?.playback ?? null)}\nLocalization timings: ${JSON.stringify(deps.episode.timing())}\nConnection: ${view.connection}\nLocalized: ${view.hasTrackingOrigin ? "Yes" : "No"}\nCapture: ${capture?.text}\n${deps.episode.view().lastError ?? ""}` : "",
       resumeOperation: view.state?.safety?.stopped === true,
       estopAvailable: view.state?.safety?.stopped ? view.state.safety.can_resume : view.capabilities?.estop.available === true,
       estopPressed: getTime() < this.stopPressedUntil,
@@ -368,6 +383,8 @@ export class UIPresenter extends BaseScriptComponent {
       onLidarMode: mode => this.lidarDisplay?.setMode(mode),
       onLidarRange: direction => this.lidarDisplay?.adjustRange(direction),
       onLidarPoints: direction => this.lidarDisplay?.adjustPoints(direction),
+      onMapToggle: () => { this.navMapEnabled = !this.navMapEnabled; },
+      onMapClickToggle: () => { this.navMapClickToWalk = !this.navMapClickToWalk; },
       onRealign: () => this.realign(),
       onDismissAlignment: () => this.dismissAlignmentReview(),
       onRecord: () => { this.deps?.speechController?.beginRecording(); },
@@ -380,6 +397,9 @@ export class UIPresenter extends BaseScriptComponent {
       },
     });
 
+    this.navigationMap = new SpecsMapSession(deps.session, (message, state) => {
+      this.uiLogger.show(message, statusToneColor(state === "error" ? "warn" : state === "success" ? "success" : "neutral"), null);
+    });
     this.configureMenuMotion(panel);
     this.refreshHud();
   }
@@ -408,6 +428,65 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   private syncLidarSelection(): void { this.lidarDisplay?.syncSetup(false); }
+
+  public suspendNavigationMap(): void {
+    this.navigationMapInput?.reset();
+    this.navigationMap?.update(false, null, false, this.navMapClickToWalk, false);
+    this.navigationMapView?.setVisible(false);
+    this.initialMapHeading = null;
+  }
+  ownsMapFace(object: SceneObject): boolean { return this.navigationMapInput?.ownsFace(object) === true; }
+  ownsMapControl(object: SceneObject): boolean { return this.navigationMapInput?.ownsControl(object) === true; }
+
+  private tickNavigationMap(): void {
+    const map = this.navigationMap;
+    if (!map) return;
+    const deps = this.requireDeps(), view = deps.session.view();
+    const dock = this.mainMenuView?.navigationMapDock();
+    const open = this.setupCompleted && this.uiState !== 0 && deps.selection.snapshot().selected && this.navMapEnabled &&
+      view.connection === "ready" && view.capabilities?.navigation.nav_map.available === true && !!dock;
+    if (open && !this.navigationMapView) {
+      const visual = new SpecsNavigationMapView(this.mainUIFrame);
+      this.navigationMapView = visual;
+      this.navigationMapInput = new SpecsNavigationMapInput(visual.root, visual.dataRoot, map.gesture);
+    }
+    const visual = this.navigationMapView;
+    if (!visual) return;
+    const controls = isManualControlEnabled(view, this.setupCompleted, false, false, this.getOperatingMode());
+    const canSend = controls && view.capabilities?.navigation.nav_goal.available === true &&
+      view.state?.safety?.stopped !== true && !deps.session.collaboration.snapshot().blocked;
+    const canCancel = controls && view.capabilities?.navigation.nav_goal.available === true && view.nav_goal?.pose != null;
+    map.update(open, view.navigationMap, canSend, this.navMapClickToWalk, canCancel);
+    visual.setVisible(open);
+    if (!open || !dock) { this.navigationMapInput?.reset(); return; }
+    visual.place(dock.position, dock.yaw, map.gesture.diameterM);
+    const forward = deps.cameraObject.getTransform().getWorldRotation().multiplyVec3(new vec3(0, 0, -1));
+    if (this.initialMapHeading === null && forward.x * forward.x + forward.z * forward.z >= 1e-6)
+      this.initialMapHeading = Math.atan2(-forward.x, -forward.z);
+    let angle = this.initialMapHeading ?? dock.yaw;
+    const origin = deps.clientTrackingOriginStore.T_map_tracking, snapshot = view.navigationMap;
+    if (origin && snapshot && origin.shared_frame_id === snapshot.shared_frame_id && origin.odom_reference_id === snapshot.odom_reference_id) {
+      const inverse = inversePose({ position: [0, 0, 0], orientation: [...origin.orientation] });
+      const [east, north] = rotateVecByQuat(multiplyRotation(inverse.orientation, [...snapshot.map_odom_rotation]), [1, 0, 0]);
+      if (Math.hypot(east, north) >= 1e-6) angle = Math.atan2(north, east);
+    }
+    const rotation = map.gesture.compassEnabled ? Math.PI / 2 + angle - dock.yaw : map.gesture.manualRotation;
+    visual.setRotation(rotation);
+    if (snapshot) visual.draw(snapshot, map.gesture.viewport, map.gesture.diameterM, map.gesture.ghost, map.gesture.compassEnabled, canCancel,
+      this.debugEnabled, view.hello?.robot ?? null);
+    else visual.loading(map.gesture.diameterM, canCancel);
+    this.navigationMapInput?.layout(snapshot, canCancel);
+    const diameterBeforeInput = map.gesture.diameterM;
+    this.navigationMapInput?.tick(getTime(), Math.min(0.1, Math.max(0, getDeltaTime())), rotation);
+    const deltaRadiusCm = (map.gesture.diameterM - diameterBeforeInput) * 50 * 0.75;
+    if (deltaRadiusCm !== 0) {
+      const shift = new vec3(-Math.sin(dock.yaw) * deltaRadiusCm, 0, -Math.cos(dock.yaw) * deltaRadiusCm);
+      const transform = this.mainUIFrame.getTransform();
+      transform.setWorldPosition(transform.getWorldPosition().add(shift));
+      this.wristMenuController?.shiftPlacement(shift);
+      visual.place(dock.position.add(shift), dock.yaw, map.gesture.diameterM);
+    }
+  }
 
 
   private refreshHud(): void {
@@ -459,6 +538,7 @@ export class UIPresenter extends BaseScriptComponent {
         this.requestStateIfReady();
       },
       onMenuShow: () => { this.mainMenuView?.placed(); this.setUIState(1); },
+      keepOpen: () => this.navigationMapInput?.isCapturingOrPressed() === true,
       onMenuHide: (immediate) => { this.mainMenuView?.setFrameFollowEnabled(false); this.setUIState(0, { immediate }); },
       onPin: () => this.mainMenuView?.setFrameFollowEnabled(false),
     });
@@ -511,6 +591,9 @@ export class UIPresenter extends BaseScriptComponent {
     nextAnimationVersion(this.setupWizardPanel, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
     nextAnimationVersion(this.mainUIFrame, DEFAULT_SCALE_ANIMATION_VERSION_KEY);
     this.setupWizardController?.dispose();
+    this.navigationMapInput?.dispose(); this.navigationMapInput = null;
+    this.navigationMap?.dispose(); this.navigationMap = null;
+    this.navigationMapView?.dispose(); this.navigationMapView = null;
     this.mainMenuView?.dispose();
     this.setupWizardController = null; this.mainMenuView = null; this.wristMenuController = null;
     this.deps = null;

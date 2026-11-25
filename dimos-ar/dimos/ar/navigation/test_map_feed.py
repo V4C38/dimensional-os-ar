@@ -1,8 +1,10 @@
 import asyncio
 from dataclasses import replace
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from dimos.ar.navigation.map_feed import NavigationMapFeed, _encode_crop
 from dimos.ar.replication.interaction import (
@@ -14,7 +16,11 @@ from dimos.ar.replication.interaction import (
     decode_interaction_request,
 )
 from dimos.ar.spatial import FrameSnapshot, frozen_matrix
-from dimos.ar.websocket.protocol import NavigationMapRequest, decode_inbound
+from dimos.ar.websocket.protocol import (
+    NavigationMapRequest,
+    decode_inbound,
+    decode_navigation_map_grid_ack,
+)
 from dimos.msgs.geometry_msgs.Pose import Pose
 from dimos.msgs.nav_msgs.OccupancyGrid import OccupancyGrid
 
@@ -77,6 +83,10 @@ def test_map_viewport_and_native_confirm_decode() -> None:
         "map_target": {"position": [1, 2], "source_generation": 3, "odom_reference_id": "odom"},
     })
     assert request.map_target == NavigationMapTarget((1, 2), "odom", 3)
+    assert decode_navigation_map_grid_ack({"subscription_id": "a", "grid_id": "f" * 64}) == ("a", "f" * 64)
+    for invalid in ("", "g" * 64, "F" * 64, "a" * 63):
+        with pytest.raises(ValueError):
+            decode_navigation_map_grid_ack({"subscription_id": "a", "grid_id": invalid})
 
 
 def test_map_snapshot_carries_the_native_to_shared_rotation() -> None:
@@ -95,6 +105,43 @@ def test_map_snapshot_carries_the_native_to_shared_rotation() -> None:
     asyncio.run(feed._publish())
     assert sent[0]["shared_frame_id"] == "shared"
     np.testing.assert_allclose(np.abs(sent[0]["map_odom_rotation"]), [0, 0, 2 ** -0.5, 2 ** -0.5])
+
+
+def test_peers_with_identical_viewports_share_crop_encoding() -> None:
+    sent: list[tuple[str, dict, bytes]] = []
+    peers = []
+    for name, center in (("first", None), ("second", (0.0, 0.0)), ("other", (1.0, 0.0))):
+        peer = SimpleNamespace(name=name, navigation_map_request=NavigationMapRequest(name, 1, True, center))
+        peer.navigation_map = lambda request, header, data, name=name: sent.append((name, header, data))
+        peers.append(peer)
+    frame = FrameSnapshot.initial("odom")
+    pose = SimpleNamespace(position=(0, 0, 0), orientation=(0, 0, 0, 1))
+    feed = NavigationMapFeed(peers=lambda: tuple(peers), pose=lambda: pose, identity=lambda: ("odom", 0),
+                             geometry=lambda: (None, ()), frames=lambda: frame,
+                             available=lambda: True, recording=False)
+    feed.update_grid(OccupancyGrid(grid=np.zeros((30, 30), dtype=np.int8), resolution=1.0,
+                                   origin=Pose(position=[-15, -15, 0])))
+    with patch("dimos.ar.navigation.map_feed._encode_crop", wraps=_encode_crop) as encode:
+        asyncio.run(feed._publish())
+    assert encode.call_count == 2
+    assert [name for name, _, _ in sent] == ["first", "second", "other"]
+    assert sent[0][2] == sent[1][2]
+    assert [header["subscription_id"] for _, header, _ in sent] == ["first", "second", "other"]
+
+
+def test_unsubscribed_peers_do_not_start_map_encoding() -> None:
+    peer = SimpleNamespace(navigation_map_request=None)
+    frame = FrameSnapshot.initial("odom")
+    with patch("dimos.ar.navigation.map_feed._height_points") as heights, \
+         patch("dimos.ar.navigation.map_feed.asyncio.to_thread") as worker:
+        feed = NavigationMapFeed(peers=lambda: (peer,), pose=lambda: None, identity=lambda: ("odom", 0),
+                                 geometry=lambda: (None, ()), frames=lambda: frame,
+                                 available=lambda: True, recording=False)
+        feed.update_grid(OccupancyGrid(grid=np.zeros((4, 4), dtype=np.int8), resolution=1.0,
+                                       origin=Pose(position=[-2, -2, 0])))
+        asyncio.run(feed._publish())
+        heights.assert_not_called()
+        worker.assert_not_called()
 
 
 def test_refused_map_target_preserves_the_world_target() -> None:

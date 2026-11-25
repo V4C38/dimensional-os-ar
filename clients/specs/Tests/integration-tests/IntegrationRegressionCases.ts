@@ -214,8 +214,8 @@ export function runRegressionCase(scenario: ReviewScenario, id: string): void {
       scenario.after(.6, () => scenario.press(menu.lidarButtons[0]));
       scenario.after(.8, () => { off = ui.getLidarMode() === "off"; scenario.press(menu.lidarButtons[2]); });
       for (let i = 0; i < 24; i++) {
-        scenario.after(1 + i * .05, () => scenario.press(scenario.button("Sensor-1:-1")));
-        scenario.after(2.5 + i * .05, () => scenario.press(scenario.button("Sensor-1:1")));
+        scenario.after(1 + i * .05, () => scenario.press(menu.sensorControls[2]));
+        scenario.after(2.5 + i * .05, () => scenario.press(menu.sensorControls[3]));
       }
       scenario.after(2.3, () => { low = ui.getLidarPreferences().pointLimit === 250; });
       scenario.after(3.8, () => { high = ui.getLidarPreferences().pointLimit === 4000; });

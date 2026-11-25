@@ -231,3 +231,27 @@ it.each([true, false])("restart preserves the shared owner and resets only fallb
   expect(start).toHaveBeenCalledWith(true);
   if (interaction) expect(interaction.mode).toBe("agent");
 });
+
+it("keeps the map open for a read-only replay without enabling navigation", () => {
+  vi.stubGlobal("getDeltaTime", () => 1 / 60);
+  try {
+    const presenter = new UIPresenter(), update = vi.fn(), setVisible = vi.fn();
+    const capability = { available: true, reason: null }, unavailable = { available: false, reason: "Recording" };
+    const view = { connection: "ready", hasTrackingOrigin: false, navigationMap: null, nav_goal: null,
+      state: { robot_link: { motion_ready: false }, safety: { stopped: false } },
+      capabilities: { navigation: { ...unavailable, nav_map: capability, nav_goal: unavailable } } };
+    const visual = { setVisible, place: vi.fn(), setRotation: vi.fn(), loading: vi.fn(), draw: vi.fn() };
+    Object.assign(presenter, {
+      setupFlow: { completed: true }, uiState: 1, navMapEnabled: true, navMapClickToWalk: true,
+      initialMapHeading: null, navigationMap: { update, gesture: { diameterM: .22, compassEnabled: true, manualRotation: 0 } },
+      navigationMapView: visual, navigationMapInput: { layout: vi.fn(), tick: vi.fn() },
+      mainMenuView: { navigationMapDock: () => ({ position: new vec3(), yaw: 0 }) },
+      getOperatingMode: () => "manual", deps: { session: { view: () => view, collaboration: { snapshot: () => ({ blocked: true }) } },
+        selection: { snapshot: () => ({ selected: true }) }, clientTrackingOriginStore: { T_map_tracking: null },
+        cameraObject: { getTransform: () => ({ getWorldRotation: () => quat.quatIdentity() }) } },
+    });
+    (presenter as any).tickNavigationMap();
+    expect(update).toHaveBeenCalledWith(true, null, false, true, false);
+    expect(setVisible).toHaveBeenCalledWith(true); expect(visual.loading).toHaveBeenCalled();
+  } finally { vi.unstubAllGlobals(); }
+});

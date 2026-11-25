@@ -54,6 +54,7 @@ from dimos.ar.websocket.protocol import (
     decode_hello_request,
     decode_inbound,
     decode_localization_observations,
+    decode_navigation_map_grid_ack,
     encode_hello,
     encode_text,
 )
@@ -898,7 +899,10 @@ class WebSocketServer:
                 request = json.loads(raw)
                 if not isinstance(request, dict):
                     raise TypeError("bulk metadata must be an object")
-                if request.get("type") == "bulk_get":
+                if request.get("type") == "navigation_map_grid_ack":
+                    subscription_id, grid_id = decode_navigation_map_grid_ack(request)
+                    peer.acknowledge_navigation_map_grid(subscription_id, grid_id)
+                elif request.get("type") == "bulk_get":
                     if request.get("kind") not in {"model", "trajectory", "route"} or any(
                         not isinstance(request.get(field), str)
                         or not 1 <= len(request[field]) <= 256

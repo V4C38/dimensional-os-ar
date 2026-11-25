@@ -198,9 +198,12 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       object => this.manipulation?.renderer.ownsHandle(object) === true);
     this.targetPriority.addPolicy(
       object => this.robotPresenter.ownsTarget(object), object => navigationController.ownsPriorityTarget(object));
+    this.targetPriority.addPolicy(
+      object => this.uiPresenter.ownsMapFace(object), object => this.uiPresenter.ownsMapControl(object));
     this.notifications = new ViewerNotificationPresenter(this.cameraObject);
     this.createEvent("OnPauseEvent").bind(() => {
       this.uiPresenter.invalidateSetupBaseline();
+      this.uiPresenter.suspendNavigationMap();
       this.manipulation?.suspend();
       this.suspended = true; this.selection.clear(); this.navigationInput?.reset();
       this.lasers?.reset();
@@ -212,6 +215,7 @@ export class DimOSSpecsClient extends BaseScriptComponent {
       if (this.uiPresenter.isSetupCompleted()) this.uiPresenter.requestAlignmentReview("Headset resumed");
     });
     this.createEvent("WorldTrackingResetEvent").bind(() => {
+      this.uiPresenter.suspendNavigationMap();
       this.manipulation?.suspend();
       this.lasers?.reset();
       this.uiPresenter.invalidateSetupBaseline();

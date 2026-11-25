@@ -148,6 +148,7 @@ export type WristMenuControllerDeps = {
   onBeforeShow?: () => void;
   centerOffsetCm?: () => number;
   onPin?: () => void;
+  keepOpen?: () => boolean;
   onMenuShow: () => void;
   onMenuHide: (immediate: boolean) => void;
 };
@@ -159,6 +160,7 @@ export class WristMenuController {
   private source: "left" | "right" | null = null;
   private visible = false;
   private summonOffset = vec3.zero();
+  private placementOffset = vec3.zero();
 
   constructor(private readonly deps: WristMenuControllerDeps) {
     this.hands = deps.hands ?? {
@@ -174,6 +176,8 @@ export class WristMenuController {
     this.deps.onMenuShow();
   }
   isPinned(): boolean { return this.visible && this.source === null; }
+  /** Preserve an application-driven shift while following the summoning hand. */
+  shiftPlacement(delta: vec3): void { if (this.source) this.placementOffset = this.placementOffset.add(delta); }
   sourceHand(): "left" | "right" | null { return this.source; }
   closeImmediate(): void {
     this.source = null; this.visible = false;
@@ -195,14 +199,14 @@ export class WristMenuController {
       if (this.source === side && !tracked) { this.pin(); continue; }
       if (changed && this.gates[side].isOpen && !this.visible) {
         this.visible = true; this.source = side;
-        this.summonOffset = vec3.zero();
+        this.summonOffset = vec3.zero(); this.placementOffset = vec3.zero();
         this.updateHandForward();
         this.placeAtPalm(); this.deps.onBeforeShow?.(); this.deps.onMenuShow();
-      } else if (changed && !this.gates[side].isOpen && this.source === side) {
+      } else if (!this.gates[side].isOpen && this.source === side && !this.deps.keepOpen?.()) {
         this.source = null; this.visible = false; this.deps.onMenuHide(false);
       }
     }
-    if (this.visible && this.source) this.placeAtPalm(dt);
+    if (this.visible && this.source && !this.deps.keepOpen?.()) this.placeAtPalm(dt);
   }
 
   private updateHandForward(): void {
@@ -228,7 +232,8 @@ export class WristMenuController {
     const camera = this.deps.cameraObject?.getTransform();
     const wrist = hand.wrist?.position;
     const offset = dt === undefined ? 0 : this.deps.centerOffsetCm?.() ?? 0;
-    const target = wrist ? new vec3(wrist.x, wrist.y + 20 + offset, wrist.z).add(this.summonOffset) : this.deps.anchorRoot.getTransform().getWorldPosition();
+    const target = (wrist ? new vec3(wrist.x, wrist.y + 20 + offset, wrist.z).add(this.summonOffset) :
+      this.deps.anchorRoot.getTransform().getWorldPosition()).add(this.placementOffset);
     const alpha = dt === undefined ? 1 : 1 - Math.exp(-12 * Math.max(0, dt));
     transform.setWorldPosition(vec3.lerp(transform.getWorldPosition(), target, alpha));
     if (camera) {

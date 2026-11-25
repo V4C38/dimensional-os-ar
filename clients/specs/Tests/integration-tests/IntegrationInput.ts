@@ -6,6 +6,8 @@ export class IntegrationInput {
   readonly actor: Interactor;
   active = true;
   held = false;
+  triggerType = InteractorTriggerType.Pinch;
+  targetingMode = TargetingMode.Indirect;
   target: Interactable | null = null;
   from = vec3.zero();
   direction = new vec3(0, -0.2, -1).normalize();
@@ -32,10 +34,10 @@ export class IntegrationInput {
       orientation: () => this.orientation, distanceToTarget: () => this.point.distance(this.from),
       currentInteractable: () => this.target, previousInteractable: () => this.target,
       isTriggering: () => this.held, wasTriggering: () => this.previousHeld,
-      currentTrigger: () => this.held ? InteractorTriggerType.Pinch : InteractorTriggerType.None,
-      previousTrigger: () => this.previousHeld ? InteractorTriggerType.Pinch : InteractorTriggerType.None,
+      currentTrigger: () => this.held ? this.triggerType : InteractorTriggerType.None,
+      previousTrigger: () => this.previousHeld ? this.triggerType : InteractorTriggerType.None,
       currentDragVector: () => this.delta, planecastDragVector: () => this.delta,
-      deltaStartPosition: () => this.delta, activeTargetingMode: () => TargetingMode.Indirect,
+      deltaStartPosition: () => this.delta, activeTargetingMode: () => this.targetingMode,
       isHoveringCurrentInteractable: () => this.target !== null,
       targetHitInfo: () => this.target ? { interactable: this.target, hitPosition: this.point,
         localHitPosition: this.target.getSceneObject().getTransform().getInvertedWorldTransform().multiplyPoint(this.point),

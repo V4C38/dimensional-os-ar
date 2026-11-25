@@ -7,7 +7,7 @@ import { CONTROL_PANEL_LAYOUT,CONTROL_PANEL_SECTION,CONTROL_PANEL_COPY as COPY,c
 import type { LidarDisplayMode } from "DimOSARClient.lspkg/Scripts/DimOSARClient/sensors/LidarDisplay";
 import type { OperatingMode, SpecsUISnapshot } from "./UIPresentationState";
 import { ScrollableTextView } from "./ScrollableTextView";
-import { PanelHeightController, RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY, panelProfile, type PanelProfile } from "./SpecsPanelPresentation";
+import { PanelHeightController, RUNTIME_LAYOUTS, RUNTIME_PANEL_SCALE, panelFooterY, capabilityPanelProfile, type PanelProfile } from "./SpecsPanelPresentation";
 
 
 import {
@@ -22,7 +22,7 @@ setPanelFollowing,
 uiMaterialLayer,
 type IconButtonResult
 } from "./UIKit";
-import { WorldMeshRenderer } from "./WorldMeshRenderer";
+import { WorldMeshRenderer, strokeMesh2D } from "./WorldMeshRenderer";
 
 interface MainMenuCallbacks {
   onSpeed?: (value: number) => void;
@@ -36,6 +36,8 @@ interface MainMenuCallbacks {
   onLidarMode: (mode: LidarDisplayMode) => void;
   onLidarRange: (direction: number) => void;
   onLidarPoints: (direction: number) => void;
+  onMapToggle?: () => void;
+  onMapClickToggle?: () => void;
   onRealign: () => void;
   onDismissAlignment: () => void;
   onRecord: () => void;
@@ -59,6 +61,9 @@ export class MainMenuView {
   private speedRoot: SceneObject;
   private localizationRoot: SceneObject;
   private lidarRoot: SceneObject;
+  private navMapRoot: SceneObject;
+  private mapToggle: IconButtonResult;
+  private mapClickToggle: IconButtonResult;
   private capabilityProfile: PanelProfile = RUNTIME_LAYOUTS.sensors;
   private capabilityKey = "";
   private speedSlider: Slider;
@@ -153,6 +158,10 @@ export class MainMenuView {
     const settings = this.bodies.get("settings")!; this.pageTitle(this.pages.get("settings")!, COPY.settings, COPY.done, "main");
     this.localizationRoot = global.scene.createSceneObject("LocalizationCapability"); this.localizationRoot.setParent(this.bodies.get("sensors")!);
     this.lidarRoot = global.scene.createSceneObject("LidarCapability"); this.lidarRoot.setParent(this.bodies.get("sensors")!);
+    this.navMapRoot = global.scene.createSceneObject("NavigationCapability"); this.navMapRoot.setParent(this.bodies.get("sensors")!);
+    this.sectionHeading(this.navMapRoot, "Navigation", 5.5);
+    this.mapToggle = this.button(this.navMapRoot, "Map", "Map · On", -23, 0, 33, ACTION, () => callbacks.onMapToggle?.());
+    this.mapClickToggle = this.button(this.navMapRoot, "Navigation via map", "Navigation via map · On", 17, 0, 46, ACTION, () => callbacks.onMapClickToggle?.());
     this.speedRoot = global.scene.createSceneObject("MovementSpeedSetting"); this.speedRoot.setParent(this.bodies.get("sensors")!);
     this.speedText = this.sectionHeading(this.speedRoot, "Movement speed", 3);
     this.speedValue = this.text(this.speedRoot, "50%", CONTENT / 2 - 9, 3, 18, 3, 21, HorizontalAlignment.Right, COLOR_WHITE);
@@ -163,29 +172,36 @@ export class MainMenuView {
     this.speedSlider.knobSize = new vec2(2.4, 4.8);
     this.retain(this.speedSlider.onValueChange.add(value => { if (!this.syncingSpeed) callbacks.onSpeed?.(0.05 + Math.max(0, Math.min(1, value)) * 0.95); }));
 
+    this.sectionHeading(this.localizationRoot, "Localization", 5.5);
     this.realign = this.button(this.localizationRoot, COPY.relocalize, COPY.relocalize, 0, 0, CONTENT, ACTION, callbacks.onRealign);
     this.button(settings, COPY.setup, COPY.setup, 0, 0.09 * UNIT, CONTENT, ACTION, callbacks.onRestart);
     this.sectionHeading(settings, COPY.headset, -0.014 * UNIT);
-    this.debug = this.button(settings, "Debug", "Debug · Off", 0, -0.084 * UNIT, CONTENT, ACTION,
+    const soundWidth = 7.5, settingsGap = 2, settingsButtonWidth = (CONTENT - soundWidth - 2 * settingsGap) / 2;
+    this.debug = this.button(settings, "Debug", "Debug · Off", -CONTENT / 2 + settingsButtonWidth / 2, -0.084 * UNIT, settingsButtonWidth, ACTION,
       () => callbacks.onDebugModeChanged(!this.debugEnabled));
-    this.button(settings, COPY.diagnostics, COPY.diagnostics, 0, -0.152 * UNIT, CONTENT, ACTION, () => this.showPage("diagnostics"));
-    const sound = this.button(settings, "Sound", "Sound · On", 0, -0.228 * UNIT, CONTENT, ACTION, () => {
-      this.soundEnabled = !this.soundEnabled; sound.labelText.text = `Sound · ${this.soundEnabled ? "On" : "Off"}`;
+    this.button(settings, COPY.diagnostics, COPY.diagnostics, -CONTENT / 2 + settingsButtonWidth * 1.5 + settingsGap, -0.084 * UNIT, settingsButtonWidth, ACTION, () => this.showPage("diagnostics"));
+    const sound = this.button(settings, "Sound", "", CONTENT / 2 - soundWidth / 2, -0.084 * UNIT, soundWidth, ACTION, () => {
+      this.soundEnabled = !this.soundEnabled;
+      soundOn.object.enabled = this.soundEnabled; soundOff.object.enabled = !this.soundEnabled;
       setButtonSelected(sound.button, this.soundEnabled);
       for (const button of this.buttons) button.playAudio = this.soundEnabled;
     });
+    sound.labelText.getSceneObject().enabled = false;
+    const soundOn = this.soundIcon(sound.sceneObject, true), soundOff = this.soundIcon(sound.sceneObject, false);
+    soundOn.setColor([0.1, 0.1, 0.1, 1]);
+    soundOff.object.enabled = false;
     setButtonSelected(sound.button, this.soundEnabled);
     const sensors = this.lidarRoot; this.pageTitle(this.pages.get("sensors")!, COPY.sensors, "Back from Sensors", "main");
     this.sectionHeading(sensors, "LiDAR", 0.225 * UNIT);
     this.lidarButtons = this.tabs(sensors, ["Off", "Obstacles", "Full"], 0.17 * UNIT,
       ["off", "obstacles", "full"].map(mode => () => callbacks.onLidarMode(mode as LidarDisplayMode)));
-    this.rangeLabel = this.text(sensors, "Clearance", -23, 0.08 * UNIT, 34, 3.5, 18, HorizontalAlignment.Center);
-    this.text(sensors, "Point limit", -23, -0.01 * UNIT, 34, 3.5, 18, HorizontalAlignment.Center);
-    this.range = this.text(sensors, "", 0.14 * UNIT, 0.08 * UNIT, 19, 4, 21, HorizontalAlignment.Center, COLOR_WHITE);
-    this.points = this.text(sensors, "", 0.14 * UNIT, -0.01 * UNIT, 19, 4, 21, HorizontalAlignment.Center, COLOR_WHITE);
-    for (const [y, action] of [[0.08 * UNIT, callbacks.onLidarRange], [-0.01 * UNIT, callbacks.onLidarPoints]] as const) {
-      for (const direction of [-1, 1]) this.sensorControls.push(this.button(sensors,
-        `Sensor${y}:${direction}`, direction < 0 ? "−" : "+", (direction < 0 ? -0.015 : 0.31) * UNIT, y, ACTION, ACTION, () => action(direction)).button);
+    this.rangeLabel = this.text(sensors, "Clearance", -35.8, 8, 13, 3.5, 18, HorizontalAlignment.Center);
+    this.text(sensors, "Points", 7.5, 8, 9, 3.5, 18, HorizontalAlignment.Center);
+    this.range = this.text(sensors, "", -11, 8, 9.5, 4, 19, HorizontalAlignment.Center, COLOR_WHITE);
+    this.points = this.text(sensors, "", 33.7, 8, 9.5, 4, 19, HorizontalAlignment.Center, COLOR_WHITE);
+    for (const [start, action] of [[-23.5, callbacks.onLidarRange], [20.5, callbacks.onLidarPoints]] as const) {
+      for (const [index, direction] of [-1, 1].entries()) this.sensorControls.push(this.button(sensors,
+        `Sensor${start}:${direction}`, direction < 0 ? "−" : "+", start + index * 6.6, 8, 5.6, ACTION, () => action(direction)).button);
     }
     this.sensorStatus = this.text(this.bodies.get("diagnostics")!, "", 0, -0.15 * UNIT, CONTENT, 10, 17);
     const diagnostics = this.bodies.get("diagnostics")!; this.pageTitle(this.pages.get("diagnostics")!, COPY.diagnostics, COPY.done, "settings");
@@ -214,20 +230,31 @@ export class MainMenuView {
     this.speedRoot.enabled = snap.manipulationAvailable === true;
     this.localizationRoot.enabled = snap.localizationAvailable === true;
     this.lidarRoot.enabled = snap.lidarAvailable;
-    const caps = [this.localizationRoot.enabled,this.speedRoot.enabled,this.lidarRoot.enabled].join();
+    this.navMapRoot.enabled = snap.navMapAvailable === true;
+    const caps = [this.localizationRoot.enabled,this.speedRoot.enabled,this.navMapRoot.enabled,this.lidarRoot.enabled].join();
     if (caps !== this.capabilityKey) {
       this.capabilityKey = caps;
       const rows: [string,number,number?][] = [];
-      if(this.localizationRoot.enabled) rows.push(["localize",6.4]);
+      if(this.localizationRoot.enabled) rows.push(["localizeHeading",3],["localize",6.4]);
       if(this.speedRoot.enabled) rows.push(["speed",10]);
-      if(this.lidarRoot.enabled) rows.push(["lidar",3,1],["tabs",6.4,1],["range",6.4],["points",6.4]);
+      if(this.navMapRoot.enabled) rows.push(["navHeading",3],["navMap",6.4]);
+      if(this.lidarRoot.enabled) rows.push(["lidar",3,1],["tabs",6.4,1],["range",6.4]);
       if(!rows.length) rows.push(["empty",3]);
-      this.capabilityProfile = panelProfile(23,rows);
+      this.capabilityProfile = capabilityPanelProfile(rows);
       const positions = this.capabilityProfile.rows;
       this.localizationRoot.getTransform().setLocalPosition(new vec3(0,positions.localize ?? 0,0));
+      for (const entry of this.rowNodes) if (entry.parent === this.localizationRoot && Math.abs(entry.y - 5.5) < 0.01) {
+        const p = entry.node.getTransform().getLocalPosition();
+        entry.node.getTransform().setLocalPosition(new vec3(p.x, (positions.localizeHeading ?? 0) - (positions.localize ?? 0), p.z));
+      }
       this.speedRoot.getTransform().setLocalPosition(new vec3(0,positions.speed ?? 0,0));
+      this.navMapRoot.getTransform().setLocalPosition(new vec3(0,positions.navMap ?? 0,0));
+      for (const entry of this.rowNodes) if (entry.parent === this.navMapRoot && Math.abs(entry.y - 5.5) < 0.01) {
+        const p = entry.node.getTransform().getLocalPosition();
+        entry.node.getTransform().setLocalPosition(new vec3(p.x, (positions.navHeading ?? 0) - (positions.navMap ?? 0), p.z));
+      }
       for(const entry of this.rowNodes) if(entry.parent === this.lidarRoot) {
-        const y = Math.abs(entry.y-22.5)<.01 ? positions.lidar : Math.abs(entry.y-17)<.01 ? positions.tabs : Math.abs(entry.y-8)<.01 ? positions.range : positions.points;
+        const y = Math.abs(entry.y-22.5)<.01 ? positions.lidar : Math.abs(entry.y-17)<.01 ? positions.tabs : positions.range;
         const p = entry.node.getTransform().getLocalPosition(); entry.node.getTransform().setLocalPosition(new vec3(p.x,y ?? 0,p.z));
       }
       this.layoutKey = ""; this.updateLayout();
@@ -250,6 +277,11 @@ export class MainMenuView {
     this.send.inactive = !snap.robotSelected || !snap.agentAvailable || busy || !speech?.prompt.trim();
     this.clear.inactive = busy || !speech?.prompt;
     this.lidarButtons.forEach((button, i) => { button.inactive = !snap.lidarAvailable; setButtonSelected(button, i === ["off", "obstacles", "full"].indexOf(snap.lidarMode)); });
+    this.mapToggle.labelText.text = `Map · ${snap.navMapEnabled ? "On" : "Off"}`;
+    this.mapClickToggle.labelText.text = `Navigation via map · ${snap.navMapClickToWalk ? "On" : "Off"}`;
+    setButtonSelected(this.mapToggle.button, snap.navMapEnabled === true);
+    setButtonSelected(this.mapClickToggle.button, snap.navMapClickToWalk === true);
+    this.mapClickToggle.button.inactive = !snap.navMapEnabled || !snap.navMapCanWalk;
     this.sensorControls.forEach(button => { button.inactive = !snap.lidarAvailable || snap.lidarMode === "off"; });
     const prefs = snap.lidarPreferences;
     this.rangeLabel.text = snap.lidarMode === "obstacles" ? "Clearance" : "Range";
@@ -274,6 +306,15 @@ export class MainMenuView {
     this.bodies.get(this.page)!.enabled = this.heightController.height + 0.01 >= this.heightController.target;
   }
   setVisible(visible: boolean): void { this.visible = visible; this.heightController.setVisible(visible); }
+  navigationMapDock(): { position: vec3; yaw: number } | null {
+    const frame = getFrameComponent(this.panel);
+    if (!frame || !isFrameInitialized(frame)) return null;
+    const transform = frame.transform, scale = frame.content.getTransform().getLocalScale();
+    if (Math.abs(transform.getWorldScale().x) < 0.0001 || Math.abs(scale.x) < 0.0001) return null;
+    const lower = transform.getWorldTransform().multiplyPoint(new vec3(0, -this.heightController.height * scale.y / 2, 0));
+    const facing = transform.getWorldRotation().multiplyVec3(new vec3(0, 0, 1));
+    return { position: lower, yaw: Math.atan2(facing.x, facing.z) };
+  }
   presencePanel(): PresencePanel | null {
     const frame = getFrameComponent(this.panel);
     if (!this.visible || !this.panel.isEnabledInHierarchy || !frame || !isFrameInitialized(frame)) return null;
@@ -317,7 +358,7 @@ export class MainMenuView {
     }
     if (this.page === "main") row("main", -25.1, rows.status);
 
-    if (key === "settings") for (const [oldY, name] of [[9, "robotActions"], [-1.4, "headset"], [-8.4, "debug"], [-15.2, "diagnostics"], [-22.8, "sound"]] as const) row("settings", oldY, rows[name]);
+    if (key === "settings") for (const [oldY, name] of [[9, "robotActions"], [-1.4, "headset"], [-8.4, "debug"]] as const) row("settings", oldY, rows[name]);
 
     if (key === "diagnostics") { row("diagnostics", -3, rows.logs); row("diagnostics", -15, rows.statistics); }
     if (key === "alignment") { row("alignment", 5.5, rows.guidance); row("alignment", -10, rows.actions); }
@@ -373,8 +414,8 @@ export class MainMenuView {
     });
   }
   private pageTitle(parent: SceneObject, title: string, closeName: string, destination: Page): void {
-    const heading = this.text(parent, title, 0, HEADER, 56, 4, 28, HorizontalAlignment.Center, COLOR_WHITE);
-    heading.getSceneObject().getTransform().setLocalPosition(new vec3(0, HEADER, CONTROL_PANEL_SECTION.depthM * UNIT));
+    const heading = this.text(parent, title, -18, HEADER, 44, 4, 28, HorizontalAlignment.Left, COLOR_WHITE);
+    heading.getSceneObject().getTransform().setLocalPosition(new vec3(-18, HEADER, CONTROL_PANEL_SECTION.depthM * UNIT));
     this.icon(parent, closeName, "close", CLOSE_X, () => this.showPage(destination));
   }
   private robotGlyph(parent: SceneObject, name: string, x: number, y: number, scale = 1): void {
@@ -388,6 +429,17 @@ export class MainMenuView {
       indices.push(first,first+1,first+2,first+2,first+1,first+3);
     }
     uiMaterialLayer(mesh.visual,14); mesh.triangles(positions,indices,[1,1,1,1]);
+  }
+  private soundIcon(parent: SceneObject, enabled: boolean): WorldMeshRenderer {
+    const mesh = new WorldMeshRenderer(parent, enabled ? "SoundOnIcon" : "SoundOffIcon");
+    mesh.object.getTransform().setLocalPosition(new vec3(0, 0, 2));
+    const speaker = [[-1.5,-0.5,-0.9,-0.5],[-0.9,-0.5,0,-1.2],[0,-1.2,0,1.2],
+      [0,1.2,-0.9,0.5],[-0.9,0.5,-1.5,0.5],[-1.5,0.5,-1.5,-0.5]];
+    const marks = enabled ? [[0.5,-0.7,0.9,0],[0.9,0,0.5,0.7],[1,-1.2,1.6,0],[1.6,0,1,1.2]]
+      : [[0.5,-0.8,1.5,0.8],[0.5,0.8,1.5,-0.8]];
+    const geometry = strokeMesh2D([...speaker, ...marks], [...speaker, ...marks].map(() => 1), 0.25);
+    uiMaterialLayer(mesh.visual, 14); mesh.triangles(geometry.positions, geometry.indices, [1,1,1,1]);
+    return mesh;
   }
   private icon(parent: SceneObject, name: string, kind: "gear" | "camera" | "robot" | "close", x: number, action: () => void): void {
     const button = this.button(parent, name, "", x, HEADER, 7.2, 7.2, action,
