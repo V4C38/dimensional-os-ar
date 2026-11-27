@@ -1,4 +1,4 @@
-"""Go2 peer replacement for the AR blueprints on the pinned DimOS release."""
+"""Go2 peer replacement for the AR blueprints on the pinned dimOS release."""
 
 from __future__ import annotations
 

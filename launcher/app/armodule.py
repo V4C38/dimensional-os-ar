@@ -34,6 +34,7 @@ from config import (
     scripts_dir,
 )
 from dimos_config import write_runtime_config
+from dimos_installation import dimos_install_state
 from discovery import run_json_probe
 from launcher_events import LauncherEvents
 from owned_operation import OwnedOperation
@@ -504,6 +505,9 @@ class ProcessManager:
             "dimos_python": status.dimos_python,
             "dimos_install_dir": dimos_install_dir,
             "dimos_version": status.dimos_version,
+            "dimos_install_state": dimos_install_state(
+                installed=bool(status.dimos_python), version_text=status.dimos_version
+            ) if status.check_ok is not None else None,
             "dimos_ref": status.dimos_ref,
             "websocket_url": status.websocket_url,
             "host_ip": status.host_ip,
@@ -625,7 +629,7 @@ class ProcessManager:
             self.runtime.update_status(phase=Phase.STOPPING)
             try:
                 await self.process_groups.stop_group(
-                    group, "previous DimOS blueprint", STOP_GRACE_SECONDS
+                    group, "previous dimOS blueprint", STOP_GRACE_SECONDS
                 )
             finally:
                 self.runtime.update_status(phase=Phase.READY if self.status.check_ok else Phase.IDLE)
@@ -738,21 +742,21 @@ class ProcessManager:
     async def _configure_system_if_needed(
         self, *, config_path: Path | None = None, env: dict[str, str] | None = None,
     ) -> None:
-        """Apply DimOS's required macOS settings via one native admin prompt.
+        """Apply dimOS's required macOS settings via one native admin prompt.
 
         The privileged commands live in configure-system.sh; here we only detect
         whether they are needed and, if so, run that script as root through the
         standard macOS authorization dialog (Touch ID / password). After this,
-        DimOS finds the settings in place and never prompts itself.
+        dimOS finds the settings in place and never prompts itself.
         """
         if sys.platform != "darwin":
             return
         python = self._selected_python()
         if not python:
-            raise ValueError("Select an installed DimOS environment first")
+            raise ValueError("Select an installed dimOS environment first")
         transport = await run_json_probe(
             python, str(self.scripts / "transport_check.py"), str(config_path or ""),
-            cwd=self.root / "launcher", env=env, timeout=10, error="DimOS transport check failed",
+            cwd=self.root / "launcher", env=env, timeout=10, error="dimOS transport check failed",
         )
         if transport != "lcm":
             return
@@ -895,7 +899,7 @@ class ProcessManager:
                 if self.status.phase == Phase.STARTING and now - last_output >= 15:
                     self._append_log(
                         f"Still starting ({int(now - started)}s elapsed); "
-                        "waiting for DimOS initialization. No new process output in 15s."
+                        "waiting for dimOS initialization. No new process output in 15s."
                     )
                     last_output = now
                 continue
@@ -1421,7 +1425,7 @@ class RuntimeProcesses:
             ):
                 raise RuntimeError("WebXR is already running or starting")
             if self.host.dependency_running or self.host.can_setup_running:
-                raise RuntimeError("Wait for DimOS setup to finish before starting WebXR")
+                raise RuntimeError("Wait for dimOS setup to finish before starting WebXR")
             paired_backend = self.backend.process if scheduled else None
             self.pending_webxr_start = asyncio.current_task()
             self.update_status(webxr_phase="starting", webxr_error=None)
@@ -1727,7 +1731,7 @@ class DependencyOperations:
                 or await self.host._running_dimos_pids()
             ):
                 raise RuntimeError(
-                    "CAN setup is unavailable while DimOS is running. Stop it yourself before configuring CAN."
+                    "CAN setup is unavailable while dimOS is running. Stop it yourself before configuring CAN."
                 )
             task = self.can_operation.start(self._configure_can(interface))
             self.host.publish_status()
@@ -1748,7 +1752,7 @@ class DependencyOperations:
                 return {**status, "setting_up": False}
             python = self.host._selected_python()
             if not python:
-                raise ValueError("Select an installed DimOS environment first")
+                raise ValueError("Select an installed dimOS environment first")
             argv = (
                 setup_command(python, interface)
                 if interface != INTERFACE
@@ -1872,7 +1876,7 @@ class DependencyOperations:
             self._require_dependency_idle()
             if self.can_setup_running or await self.host._running_dimos_pids():
                 raise RuntimeError(
-                    "Stop DimOS yourself before installing dependencies, and wait for CAN setup to finish"
+                    "Stop dimOS yourself before installing dependencies, and wait for CAN setup to finish"
                 )
             task = self.operation.start(
                 self._install_dependencies(
@@ -1981,7 +1985,7 @@ class PlannerReadiness:
             result: dict[str, Any] = {
                 "ready": False,
                 "state": "incomplete",
-                "message": "Select an installed DimOS environment first.",
+                "message": "Select an installed dimOS environment first.",
             }
             if python:
                 try:

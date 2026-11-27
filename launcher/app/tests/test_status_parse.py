@@ -36,7 +36,7 @@ def test_parse_websocket_banner_before_ready(tmp_path: Path) -> None:
     mgr = ProcessManager(root=tmp_path)
     mgr.runtime.update_status(phase=Phase.STARTING)
     mgr.runtime._parse_armodule_line(
-        "WebSocket:    ws://0.0.0.0:8787 (not listening yet — booting DimOS stack…)"
+        "WebSocket:    ws://0.0.0.0:8787 (not listening yet — booting dimOS stack…)"
     )
     assert mgr.status.websocket_url == "ws://0.0.0.0:8787"
     assert mgr.status.phase == Phase.STARTING

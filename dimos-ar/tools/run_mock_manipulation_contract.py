@@ -44,7 +44,7 @@ def isolated_environment(directory: Path, inherited: dict[str, str]) -> dict[str
 def runtime_command(python: Path, config: Path) -> list[str]:
     cli = python.parent / "dimos"
     if not cli.is_file():
-        raise ValueError(f"No DimOS CLI beside {python}; install dimos-ar[manipulation] in that environment")
+        raise ValueError(f"No dimOS CLI beside {python}; install dimos-ar[manipulation] in that environment")
     return [str(python), str(cli), "--simulation=mock", "--viewer=none", "run",
             "dimos-ar.openyam-ar-planner", "--config", str(config)]
 
@@ -52,7 +52,7 @@ def runtime_command(python: Path, config: Path) -> list[str]:
 def write_configuration(directory: Path, port: int) -> Path:
     path = directory / "config" / "dimos" / "config"
     path.parent.mkdir(parents=True)
-    # A private discovery bus keeps worker RPCs apart from other local DimOS runs.
+    # A private discovery bus keeps worker RPCs apart from other local dimOS runs.
     # Disabling LAN scouting alone still discovers unrelated loopback peers.
     with closing(socket.socket(socket.AF_INET, socket.SOCK_DGRAM)) as listener:
         listener.bind(("127.0.0.1", 0))

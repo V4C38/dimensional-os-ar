@@ -43,6 +43,27 @@ def _segment_in_crop(
     return a[0] + dx * start, a[1] + dy * start, a[0] + dx * end, a[1] + dy * end
 
 
+def _remaining_path(path: tuple[XY, ...], robot: XY) -> tuple[XY, ...]:
+    """Project onto the route and discard its traveled prefix before viewport cropping."""
+    if len(path) < 2:
+        return ()
+    best_distance = math.inf
+    best_index = 0
+    nearest = path[0]
+    for index, (a, b) in enumerate(pairwise(path)):
+        dx, dy = b[0] - a[0], b[1] - a[1]
+        length_sq = dx * dx + dy * dy
+        progress = min(1.0, max(0.0, ((robot[0] - a[0]) * dx +
+                                    (robot[1] - a[1]) * dy) / length_sq)) if length_sq else 0.0
+        point = a[0] + progress * dx, a[1] + progress * dy
+        distance = math.dist(robot, point)
+        if distance <= best_distance:
+            best_distance, best_index, nearest = distance, index, point
+    remainder = (nearest, *path[best_index + 1:])
+    return tuple(point for i, point in enumerate(remainder)
+                 if i == 0 or math.dist(point, remainder[i - 1]) > 1e-9)
+
+
 def _height_points(cloud: PointCloud2 | None, robot: XY) -> np.ndarray:
     if cloud is None:
         return np.empty((0, 3), dtype="<f4")
@@ -98,7 +119,7 @@ def _encode_crop(
     target, path = geometry
     runs: list[list[XY]] = []
     last: XY | None = None
-    for a, b in pairwise(path):
+    for a, b in pairwise(_remaining_path(path, (robot[0], robot[1]))):
         segment = _segment_in_crop(a, b, low, high)
         if segment is None:
             last = None

@@ -301,9 +301,10 @@ export function localizationCaptureStatus(
       return { text: "Look toward the robot to scan", color: "warn" };
     case "waiting_for_retry":
       return { text: "Localized — correction retry pending", color: "muted" };
-    case "capturing":
     case "awaiting_result":
-      return { text: `Scanning ${".".repeat(1 + Math.floor(nowS / 0.4) % 3)}\n${episodeView.capturePolicy === "any_angle" ? "Look around the mapped room" : "Look at the marker"}`, color: "neutral" };
+      return { text: "Checking the capture…", color: "neutral" };
+    case "capturing":
+      return { text: `Scanning ${".".repeat(1 + Math.floor(nowS / 0.4) % 3)}\n${episodeView.purpose === "headset" ? "Look around the mapped room" : "Look at the marker"}`, color: "neutral" };
     case "failed":
       if (episodeView.retryInS != null) return { text: "Retrying scan automatically…", color: "neutral" };
       return {

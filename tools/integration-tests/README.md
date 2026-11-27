@@ -88,7 +88,7 @@ Specs retains its deterministic manipulation fixture and native probes. Both cli
 and Execute, unselected following/release, gripper, Reset and Stop/Resume in the
 same golden video. The full native run retains additional manipulation probes.
 Browser motion uses a fixture; the official ARModule mock
-contract remains the evidence for installed DimOS planning/control.
+contract remains the evidence for installed dimOS planning/control.
 
 ## Native execution policy
 
@@ -98,7 +98,7 @@ native run, including focused probes, must pass the source handoff audit.
 
 ## Official manipulation runtime
 
-`python dimos-ar/tools/run_mock_manipulation_contract.py` exercises the installed DimOS planning/control composition through the current AR control/bulk protocol. Install `dimos-ar[manipulation,dev]` in the selected Python 3.12 environment first. The runner always selects mock hardware, disables relay/localization, uses a temporary configuration, chooses a localhost test port, and owns cleanup of its process group. The local CI gate and ARModule GitHub job run this contract; a browser mock planner does not replace it.
+`python dimos-ar/tools/run_mock_manipulation_contract.py` exercises the installed dimOS planning/control composition through the current AR control/bulk protocol. Install `dimos-ar[manipulation,dev]` in the selected Python 3.12 environment first. The runner always selects mock hardware, disables relay/localization, uses a temporary configuration, chooses a localhost test port, and owns cleanup of its process group. The local CI gate and ARModule GitHub job run this contract; a browser mock planner does not replace it.
 
 Successful non-golden raw recordings are discarded after validation unless extra
 media is requested. Golden footage, screenshots, logs and failure recordings remain.

@@ -6,7 +6,7 @@
 #   ./launcher/scripts/run-ci.sh [all|backend|launcher|core|specs|webxr]
 #
 # Must run outside the Cursor agent sandbox (normal terminal, or agent with
-# unrestricted / "all" permissions). Sandboxed runs fail when DimOS logging
+# unrestricted / "all" permissions). Sandboxed runs fail when dimOS logging
 # tries to write under ~/.local/state/dimos/logs/.
 #
 # Environment (optional):
@@ -125,7 +125,7 @@ run_dimos_ar_job() {
     # The mock Go2 graph imports perception. CI runs on CPU-only hosts.
     pip install --index-url https://download.pytorch.org/whl/cpu 'torch>=2.1,<2.8' 'torchvision>=0.16,<0.23'
   fi
-  # Match fresh GitHub dependencies while keeping the reviewed DimOS baseline.
+  # Match fresh GitHub dependencies while keeping the reviewed dimOS baseline.
   # CI_DIMOS_REVISION permits explicit compatibility probes against another commit.
   GIT_LFS_SKIP_SMUDGE=1 pip install --src "${CI_VENV}/src" --upgrade -r "${DIMOS_AR}/requirements-ci.txt" -e "${CI_DIMOS_REQUIREMENT}" -e ".[dev,unitree,manipulation]"
 

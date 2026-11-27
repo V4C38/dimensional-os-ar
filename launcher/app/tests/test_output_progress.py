@@ -80,7 +80,7 @@ async def test_quiet_startup_reports_wait_without_claiming_progress(
     assert await manager._drain_output(process) == 0
     assert lines == [
         (
-            "Still starting (16s elapsed); waiting for DimOS initialization. "
+            "Still starting (16s elapsed); waiting for dimOS initialization. "
             "No new process output in 15s."
         )
     ]

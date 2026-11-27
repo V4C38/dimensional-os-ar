@@ -27,12 +27,14 @@ import { WristMenuController } from "./WristMenuController";
 import { SpecsMapSession } from "../navigation/SpecsMapGesture";
 import { SpecsNavigationMapView } from "../navigation/SpecsNavigationMapView";
 import { SpecsNavigationMapInput } from "../navigation/SpecsNavigationMapInput";
+import { SPECS_LIDAR_MAX_POINTS } from "../sensors/PointCloudRenderer";
 
 const EDITOR_MENU_SCALE = RUNTIME_PANEL_SCALE;
 const SPECTACLES_MENU_SCALE = RUNTIME_PANEL_SCALE;
 const EDITOR_MENU_ANIM_DURATION = 0.35;
 const SPECTACLES_MENU_SCALE_IN_DURATION = 0.25;
 const SPECTACLES_MENU_SCALE_OUT_DURATION = 0.2;
+const DEFAULT_LIDAR_PREFS = { pointLimit: SPECS_LIDAR_MAX_POINTS, obstacleRangeM: 0.6, fullRangeM: 5 };
 
 type SetUIStateOptions = {
   immediate?: boolean;
@@ -121,8 +123,18 @@ export class UIPresenter extends BaseScriptComponent {
       read: () => {
         try {
           const saved = store.getString("dimos.sensors.v1");
-          return saved ? JSON.parse(saved) : { pointLimit: 1500, obstacleRangeM: 0.6, fullRangeM: 5 };
-        } catch { return { pointLimit: 1500, obstacleRangeM: 0.6, fullRangeM: 5 }; }
+          if (!saved) return DEFAULT_LIDAR_PREFS;
+          const preferences = JSON.parse(saved);
+          return {
+            pointLimit: Number.isFinite(preferences?.pointLimit)
+              ? Math.min(preferences.pointLimit, SPECS_LIDAR_MAX_POINTS) : SPECS_LIDAR_MAX_POINTS,
+            obstacleRangeM: Number.isFinite(preferences?.obstacleRangeM)
+              ? preferences.obstacleRangeM : DEFAULT_LIDAR_PREFS.obstacleRangeM,
+            fullRangeM: Number.isFinite(preferences?.fullRangeM)
+              ? preferences.fullRangeM : DEFAULT_LIDAR_PREFS.fullRangeM,
+            mode: preferences?.mode,
+          };
+        } catch { return DEFAULT_LIDAR_PREFS; }
       },
       write: preferences => store.putString("dimos.sensors.v1", JSON.stringify(preferences)),
     });
@@ -183,7 +195,7 @@ export class UIPresenter extends BaseScriptComponent {
     this.wristMenuController?.tick(dt);
     this.refreshHud();
     this.refreshRobotLabels();
-    this.mainMenuView?.apply(this.snapshot());
+    if (this.uiState !== 0 || this.mainUIFrame.enabled) this.mainMenuView?.apply(this.snapshot());
     this.mainMenuView?.tick(dt);
     this.tickNavigationMap();
   }
@@ -231,7 +243,7 @@ export class UIPresenter extends BaseScriptComponent {
   }
 
   getLidarMode() { return this.lidarDisplay?.mode ?? "off"; }
-  getLidarPreferences() { return this.lidarDisplay?.preferences ?? { pointLimit: 1500, obstacleRangeM: 0.6, fullRangeM: 5 }; }
+  getLidarPreferences() { return this.lidarDisplay?.preferences ?? DEFAULT_LIDAR_PREFS; }
   snapshot(): SpecsUISnapshot {
     const deps = this.requireDeps(), view = deps.session.view();
     const diagnosticsVisible = this.mainMenuView?.isDiagnosticsVisible() === true;
@@ -382,7 +394,10 @@ export class UIPresenter extends BaseScriptComponent {
       onPin: () => { this.wristMenuController?.pin(); this.mainMenuView?.setFrameFollowEnabled(false); },
       onLidarMode: mode => this.lidarDisplay?.setMode(mode),
       onLidarRange: direction => this.lidarDisplay?.adjustRange(direction),
-      onLidarPoints: direction => this.lidarDisplay?.adjustPoints(direction),
+      onLidarPoints: direction => {
+        if (direction < 0 || this.getLidarPreferences().pointLimit < SPECS_LIDAR_MAX_POINTS)
+          this.lidarDisplay?.adjustPoints(direction);
+      },
       onMapToggle: () => { this.navMapEnabled = !this.navMapEnabled; },
       onMapClickToggle: () => { this.navMapClickToWalk = !this.navMapClickToWalk; },
       onRealign: () => this.realign(),
@@ -430,8 +445,8 @@ export class UIPresenter extends BaseScriptComponent {
   private syncLidarSelection(): void { this.lidarDisplay?.syncSetup(false); }
 
   public suspendNavigationMap(): void {
-    this.navigationMapInput?.reset();
-    this.navigationMap?.update(false, null, false, this.navMapClickToWalk);
+    this.navigationMapInput?.setEnabled(false);
+    this.navigationMap?.update(false, null, false, this.navMapClickToWalk, getTime());
     this.navigationMapView?.setVisible(false);
     this.initialMapHeading = null;
   }
@@ -442,28 +457,33 @@ export class UIPresenter extends BaseScriptComponent {
     const map = this.navigationMap;
     if (!map) return;
     const deps = this.requireDeps(), view = deps.session.view();
+    if (view.connection !== "ready") { this.suspendNavigationMap(); return; }
     const dock = this.mainMenuView?.navigationMapDock();
     const open = this.setupCompleted && this.uiState !== 0 && deps.selection.snapshot().selected && this.navMapEnabled &&
       view.connection === "ready" && view.capabilities?.navigation.nav_map.available === true && !!dock;
     if (open && !this.navigationMapView) {
-      const visual = new SpecsNavigationMapView(this.mainUIFrame);
+      const visual = new SpecsNavigationMapView(this.mainUIFrame.getParent());
+      visual.setVisible(false);
       this.navigationMapView = visual;
       this.navigationMapInput = new SpecsNavigationMapInput(visual.root, visual.dataRoot, map.gesture);
+      this.navigationMapInput.setEnabled(false);
     }
     const visual = this.navigationMapView;
     if (!visual) return;
     const controls = isManualControlEnabled(view, this.setupCompleted, false, false, this.getOperatingMode());
     const canSend = controls && view.capabilities?.navigation.nav_goal.available === true &&
       view.state?.safety?.stopped !== true && !deps.session.collaboration.snapshot().blocked;
-    map.update(open, view.navigationMap, canSend, this.navMapClickToWalk);
-    visual.setVisible(open);
-    if (!open || !dock) { this.navigationMapInput?.reset(); return; }
+    const now = getTime(), dt = Math.min(0.1, Math.max(0, getDeltaTime()));
+    const snapshot = map.update(open, view.navigationMap, canSend, this.navMapClickToWalk, now);
+    const interactive = visual.animate(open, dt);
+    this.navigationMapInput?.setEnabled(interactive);
+    if (!open || !dock) return;
     visual.place(dock.position, dock.yaw, map.gesture.diameterM);
     const forward = deps.cameraObject.getTransform().getWorldRotation().multiplyVec3(new vec3(0, 0, -1));
     if (this.initialMapHeading === null && forward.x * forward.x + forward.z * forward.z >= 1e-6)
       this.initialMapHeading = Math.atan2(-forward.x, -forward.z);
     let angle = this.initialMapHeading ?? dock.yaw;
-    const origin = deps.clientTrackingOriginStore.T_map_tracking, snapshot = view.navigationMap;
+    const origin = deps.clientTrackingOriginStore.T_map_tracking;
     if (origin && snapshot && origin.shared_frame_id === snapshot.shared_frame_id && origin.odom_reference_id === snapshot.odom_reference_id) {
       const inverse = inversePose({ position: [0, 0, 0], orientation: [...origin.orientation] });
       const [east, north] = rotateVecByQuat(multiplyRotation(inverse.orientation, [...snapshot.map_odom_rotation]), [1, 0, 0]);
@@ -476,7 +496,7 @@ export class UIPresenter extends BaseScriptComponent {
     else visual.loading(map.gesture.diameterM);
     this.navigationMapInput?.layout(snapshot);
     const diameterBeforeInput = map.gesture.diameterM;
-    this.navigationMapInput?.tick(getTime(), Math.min(0.1, Math.max(0, getDeltaTime())), rotation);
+    this.navigationMapInput?.tick(now, dt, rotation);
     const deltaRadiusCm = (map.gesture.diameterM - diameterBeforeInput) * 50 * 0.75;
     if (deltaRadiusCm !== 0) {
       const shift = new vec3(-Math.sin(dock.yaw) * deltaRadiusCm, 0, -Math.cos(dock.yaw) * deltaRadiusCm);

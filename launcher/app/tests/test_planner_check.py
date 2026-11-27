@@ -30,7 +30,7 @@ def test_version_mismatch_returns_actionable_error_before_model_import(monkeypat
 def test_editable_checkout_and_conflicting_family_are_preserved_and_detected(
     tmp_path, monkeypatch
 ):
-    checkout = tmp_path / "DimOS checkout"
+    checkout = tmp_path / "dimOS checkout"
     checkout.mkdir()
     (checkout / "pyproject.toml").write_text('[project]\nname="dimos"\n')
     dist = SimpleNamespace(
@@ -93,7 +93,7 @@ async def test_planner_start_failure_has_no_process_side_effects(tmp_path, monke
         manager,
         "planner_status",
         AsyncMock(
-            return_value={"ready": False, "message": "RoboPlan does not match DimOS"}
+            return_value={"ready": False, "message": "RoboPlan does not match dimOS"}
         ),
     )
     cleanup = AsyncMock()
@@ -110,7 +110,7 @@ async def test_dependency_install_does_not_stop_external_runtime(tmp_path, monke
     monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[123]))
     installer = AsyncMock()
     monkeypatch.setattr(manager.dependencies, "_run_tracked", installer)
-    with pytest.raises(RuntimeError, match="Stop DimOS yourself"):
+    with pytest.raises(RuntimeError, match="Stop dimOS yourself"):
         await manager.run_setup(dimos_python="/selected/python", manipulation=True)
     installer.assert_not_awaited()
 

@@ -20,7 +20,7 @@ def write_runtime_config(armodule: dict[str, Any], *, use_go2_localization: bool
     source = dimos_config_path()
     data = json.loads(source.read_text()) if source.is_file() else {}
     if not isinstance(data, dict):
-        raise TypeError("DimOS configuration must contain a JSON object")
+        raise TypeError("dimOS configuration must contain a JSON object")
     data["armodule"] = armodule
     localization = armodule.get("localization") or {}
     old_relocalizer = data.pop("go2relocalization", None) or {}
@@ -33,13 +33,13 @@ def write_runtime_config(armodule: dict[str, Any], *, use_go2_localization: bool
         elif old_relocalizer.get("map_file") and not mapper.get("map_file"):
             raise ValueError(
                 "The saved Go2 relocalizer map uses an older format. "
-                "Select a .map.db keyframe map or clear Saved LiDAR map."
+                "Select a .map.db keyframe map or clear dimOS saved map."
             )
         map_file = mapper.get("map_file")
         if map_file and str(map_file).lower().endswith(".pc2.lcm"):
             raise ValueError(
                 "The selected .pc2.lcm map contains a flat point cloud. "
-                "Select a .map.db keyframe map or clear Saved LiDAR map."
+                "Select a .map.db keyframe map or clear dimOS saved map."
             )
         if mapper:
             data["pgovoxelmapper"] = mapper

@@ -12,14 +12,14 @@
 # selector; non-interactive mode auto-picks a single robot or falls back to simulated.
 #
 # Environment (optional):
-#   DIMOS_PYTHON   Path to Python in your DimOS .venv (overrides auto-detect)
+#   DIMOS_PYTHON   Path to Python in your dimOS .venv (overrides auto-detect)
 #   ROBOT_IP       Pin a specific robot IP and skip discovery (or "simulated" replay)
 #   LISTEN_HOST    WebSocket bind address (default 0.0.0.0)
 #   DIMOS_LOG_LEVEL  Log verbosity (default INFO; set DEBUG for verbose runs)
 #   DIMOS_AR_FORCE_COLOR=1  Force ANSI colors when stdout is not a TTY
 #   DIMOS_CONFIGURE_SYSTEM=1  Enable interactive sysctl/ulimit prompts (off by default)
 #   DIMOS_AR_SKIP_OPENAI_CHECK=1  Skip the OpenAI API reachability probe at startup
-#   Localization (dimos-ar / unitree_go2_ar, DimOS config — not this script's argv):
+#   Localization (dimos-ar / unitree_go2_ar, dimOS config — not this script's argv):
 #     ~/.config/dimos/config  armodule.localization.providers
 #     ARMODULE__LOCALIZATION__PROVIDERS  env override (JSON list)
 #     MULTISET_CLIENT_ID / MULTISET_CLIENT_SECRET  VPS credentials (not in config file)
@@ -48,7 +48,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     --config)
       if [[ $# -lt 2 || ! -f "${2:-}" ]]; then
-        echo "--config requires an existing native DimOS config file" >&2
+        echo "--config requires an existing native dimOS config file" >&2
         exit 1
       fi
       CONFIG_FLAG="$(cd "$(dirname "$2")" && pwd -P)/$(basename "$2")"
@@ -85,16 +85,16 @@ fi
 
 if ! python_has_dimos_ar "${PYTHON}"; then
   print_color 2 31 "dimos-ar blueprints are not registered in ${PYTHON}."
-  echo "DimOS discovers them from the dimos.blueprints entry points, not from import dimos.ar." >&2
+  echo "dimOS discovers them from the dimos.blueprints entry points, not from import dimos.ar." >&2
   echo "A stale editable install can import the package and still fail here." >&2
   echo "Fix: run Install in the launcher, or:" >&2
   echo "  cd \"${ROOT}/dimos-ar\" && \"${PYTHON}\" -m pip install -e \".[dev]\"" >&2
   exit 1
 fi
 
-# DimOS needs a few macOS network settings for LCM (multicast route, socket
+# dimOS needs a few macOS network settings for LCM (multicast route, socket
 # buffers) that require admin rights. Apply them here with a normal sudo prompt
-# before booting, so the DimOS process itself never has to prompt (it runs with
+# before booting, so the dimOS process itself never has to prompt (it runs with
 # stdin redirected and cannot). The launcher sets DIMOS_AR_SKIP_SYSCONFIG=1
 # because it applies the same step via the native macOS admin prompt beforehand.
 ensure_system_config() {
@@ -107,7 +107,7 @@ ensure_system_config() {
   [[ -x "${helper}" ]] || return 0
 
   if ! transport="$(cd "${ROOT}/launcher" && "${PYTHON}" "${SCRIPT_DIR}/transport_check.py" "${CONFIG_FLAG}")"; then
-    echo "DimOS transport check failed." >&2
+    echo "dimOS transport check failed." >&2
     exit 1
   fi
   [[ "${transport}" == '"lcm"' ]] || return 0
@@ -122,7 +122,7 @@ ensure_system_config() {
     exit 1
   fi
 
-  echo "Configuring macOS network settings for DimOS (requires your admin password)…" >&2
+  echo "Configuring macOS network settings for dimOS (requires your admin password)…" >&2
   if sudo "${helper}" --apply --state-dir "${state_dir}"; then
     export DIMOS_AR_SKIP_SYSCONFIG=1
   else
@@ -306,14 +306,14 @@ elif [[ -z "${DIMOS_AR_SKIP_OPENAI_CHECK:-}" ]]; then
   fi
 fi
 
-# DimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot
+# dimOS GlobalConfig reads ROBOT_IP (or a .env file) to open the robot
 # connection; without it the connection module aborts with "IP address must be
 # provided". Auto-discover unless the caller pinned ROBOT_IP via --robot-ip or env.
 if [[ "${MANIPULATION}" != "1" && -z "${ROBOT_IP:-}" ]]; then
   resolve_robot_ip
 fi
 
-# Map the explicit simulated source to DimOS offline replay.
+# Map the explicit simulated source to dimOS offline replay.
 DISPLAY_ROBOT_IP="${ROBOT_IP:-local}"
 REPLAY=0
 PINNED_IP=""
@@ -354,7 +354,7 @@ echo "Blueprint:    ${SELECTED_BLUEPRINT}"
 echo "Label:        ${STACK_LABEL}"
 echo "Equivalent:   ${RUN_CMD[*]}"
 echo "Robot IP:     ${DISPLAY_ROBOT_IP}"
-echo "WebSocket:    ws://${LISTEN_HOST}:8787 (not listening yet — booting DimOS stack…)"
+echo "WebSocket:    ws://${LISTEN_HOST}:8787 (not listening yet — booting dimOS stack…)"
 echo "Log level:    ${DIMOS_LOG_LEVEL} (verbose: DIMOS_LOG_LEVEL=DEBUG ./launcher/scripts/start.sh)"
 echo "Logs:         stdout + ~/.local/state/dimos/logs/.../main.jsonl (dimos log -f)"
 print_color 1 32 "Host IP:      ${LAN_IP}"

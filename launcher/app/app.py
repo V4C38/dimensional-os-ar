@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import sys
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -41,7 +42,7 @@ from config import (
     read_env,
     validate_env_value,
 )
-from dimos_installation import check_setup_location, resolve_dimos_python
+from dimos_installation import check_setup_location, dimos_requirement, resolve_dimos_python
 from discovery import discover_devices, validate_replay
 from robot_profiles import RobotProfiles, default_mount
 from robot_sources import (
@@ -227,6 +228,7 @@ def settings_payload(profile_id: str | None = None, *, context: LauncherContext)
         **{key: ui[key] for key in LOCALIZATION_POLICY_DEFAULTS},
         "defaults": {
             "blueprints": blueprint_metadata(),
+            "dimos_min_version": dimos_requirement().removeprefix("dimos>="),
             "log_levels": sorted(LOG_LEVELS),
             "log_level": DEFAULT_LOG_LEVEL,
             "mounts": [dict(DEFAULT_MOUNT)],
@@ -282,9 +284,9 @@ async def api_dimos_refs(context: ContextDependency) -> dict[str, Any]:
             "git", "ls-remote", "--heads", "--tags", DIMOS_REMOTE, timeout=15
         )
     except FileNotFoundError as exc:
-        raise HTTPException(status_code=500, detail="git is required to list DimOS refs") from exc
+        raise HTTPException(status_code=500, detail="git is required to list dimOS refs") from exc
     except TimeoutError as exc:
-        raise HTTPException(status_code=504, detail="Timed out listing DimOS refs") from exc
+        raise HTTPException(status_code=504, detail="Timed out listing dimOS refs") from exc
     if code:
         detail = err.decode("utf-8", errors="replace").strip() or "git ls-remote failed"
         raise HTTPException(status_code=502, detail=detail)
@@ -298,7 +300,7 @@ class BrowseInstallBody(BaseModel):
 
 @setup_routes.post("/api/browse-dimos-install")
 async def api_browse_dimos_install(body: BrowseInstallBody) -> dict[str, str | None]:
-    """Open a native folder chooser for an existing DimOS installation."""
+    """Open a native folder chooser for an existing dimOS installation."""
     current = body.path.strip()
     start_dir = Path(current).expanduser() if current else Path.home()
     if start_dir.is_file():
@@ -308,16 +310,29 @@ async def api_browse_dimos_install(body: BrowseInstallBody) -> dict[str, str | N
     if start_dir.name in {".venv", "venv"}:
         start_dir = start_dir.parent
     start_dir = start_dir if start_dir.is_dir() else Path.home()
-    return {"path": await _choose_path("Select DimOS installation", directory=start_dir)}
+    return {"path": await _choose_path("Select dimOS installation", directory=start_dir, folders=True)}
+
+
+@setup_routes.post("/api/browse-native-map")
+async def api_browse_native_map(body: BrowseInstallBody) -> dict[str, str | None]:
+    """Browse local folders for a saved dimOS keyframe database."""
+    current = Path(body.path.strip()).expanduser()
+    start_dir = current if body.path.strip() and current.is_dir() else current.parent
+    if not start_dir.is_absolute() or not start_dir.is_dir():
+        start_dir = Path.home()
+    return {"path": await _choose_path(
+        "Select dimOS saved map", directory=start_dir, file_filter="dimOS saved maps | *.map.db"
+    )}
 
 
 async def _choose_path(
-    title: str, *, directory: Path | None = None, file_filter: str | None = None
+    title: str, *, directory: Path | None = None, file_filter: str | None = None,
+    folders: bool = False,
 ) -> str | None:
     if not _has_display():
         raise HTTPException(status_code=409, detail="Enter a local path; no desktop chooser is available")
     if sys.platform == "darwin":
-        kind = "folder" if directory is not None else "file"
+        kind = "folder" if folders else "file"
         location = f" default location (POSIX file {json.dumps(str(directory), ensure_ascii=False)})" if directory else ""
         script = f"POSIX path of (choose {kind} with prompt {json.dumps(title)}{location})"
         command = ["osascript", "-e", script]
@@ -327,7 +342,9 @@ async def _choose_path(
             raise HTTPException(status_code=501, detail="Enter a local path or install zenity")
         command = [chooser, "--file-selection", f"--title={title}"]
         if directory is not None:
-            command.extend(["--directory", f"--filename={directory}/"])
+            command.append(f"--filename={directory}/")
+        if folders:
+            command.append("--directory")
         if file_filter:
             command.append(f"--file-filter={file_filter}")
     try:
@@ -348,7 +365,7 @@ async def api_setup_location(body: SetupBody) -> dict[str, str]:
     try:
         path = body.dimos_python if body.mode == "existing" else body.clone_dir
         return await asyncio.to_thread(check_setup_location, body.mode, path)
-    except (OSError, ValueError):
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         return {"state": "invalid", "message": "Could not access this location."}
 
 
@@ -513,7 +530,7 @@ async def prepare_and_start(body: StartBody, context: LauncherContext) -> dict[s
     devices = []
     if source.mode in {"auto", "device"}:
         if not python:
-            raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+            raise HTTPException(status_code=409, detail="Select a dimOS environment first")
         try:
             devices = await discover_devices(python, robot)
         except (TypeError, ValueError, OSError, TimeoutError) as exc:
@@ -531,7 +548,7 @@ async def prepare_and_start(body: StartBody, context: LauncherContext) -> dict[s
     replay_streams = source.streams
     if replay:
         if not python:
-            raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+            raise HTTPException(status_code=409, detail="Select a dimOS environment first")
         try:
             info = await validate_replay(python, replay, robot, replay_streams)
             if info["needs_selection"]:
@@ -540,7 +557,7 @@ async def prepare_and_start(body: StartBody, context: LauncherContext) -> dict[s
         except (TypeError, ValueError, OSError, TimeoutError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     if python != context.manager.selected_python:
-        raise HTTPException(status_code=409, detail="DimOS environment changed during startup")
+        raise HTTPException(status_code=409, detail="dimOS environment changed during startup")
     try:
         await context.manager.start_armodule(
             blueprint=body.blueprint,
@@ -686,7 +703,7 @@ async def api_delete_robot_profile(profile_id: str, context: ContextDependency) 
 async def api_discovery(robot: Literal["unitree_go2", "openyam"], context: ContextDependency) -> dict[str, Any]:
     python = context.manager.selected_python
     if not python:
-        raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+        raise HTTPException(status_code=409, detail="Select a dimOS environment first")
     try:
         return {"devices": await discover_devices(python, robot)}
     except (TypeError, ValueError, OSError, TimeoutError) as exc:
@@ -707,7 +724,7 @@ class ReplayBody(BaseModel):
 @runtime_routes.post("/api/replay/inspect")
 async def api_inspect_replay(body: ReplayBody, context: ContextDependency) -> dict[str, Any]:
     if not context.manager.selected_python:
-        raise HTTPException(status_code=409, detail="Select a DimOS environment first")
+        raise HTTPException(status_code=409, detail="Select a dimOS environment first")
     try:
         return await validate_replay(context.manager.selected_python, body.path, body.robot, body.streams)
     except (TypeError, ValueError, OSError, TimeoutError) as exc:
@@ -751,7 +768,7 @@ async def api_preferences_put(body: PreferencesBody, context: ContextDependency)
 
 def create_app(context: LauncherContext | None = None) -> FastAPI:
     app = FastAPI(
-        title="DimOS ARModule", lifespan=lifespan,
+        title="dimOS ARModule", lifespan=lifespan,
         dependencies=[Depends(require_local_launcher)],
     )
     app.state.launcher = context if context is not None else LauncherContext(

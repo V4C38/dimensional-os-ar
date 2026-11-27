@@ -1,4 +1,4 @@
-"""Bounded draft-only dictation using DimOS's installed audio pipeline."""
+"""Bounded draft-only dictation using dimOS's installed audio pipeline."""
 
 from __future__ import annotations
 
@@ -36,14 +36,14 @@ class LocalSpeechTranscriber:
         if self._transcribe is not None:
             return None
         if find_spec("av") is None:
-            return "Local dictation audio dependencies are missing. Reinstall dimos-ar in the selected DimOS environment, then reconnect."
+            return "Local dictation audio dependencies are missing. Reinstall dimos-ar in the selected dimOS environment, then reconnect."
         if find_spec("faster_whisper") is None and find_spec("whisper") is None:
-            return "Local dictation needs dimos-ar[speech] in the selected DimOS environment. Install the speech extra, then reconnect."
+            return "Local dictation needs dimos-ar[speech] in the selected dimOS environment. Install the speech extra, then reconnect."
         return None
 
     def _local_transcribe(self, recording: bytes, progress: Callable[[str], None]) -> str:
         # These are the same decoder and normalize -> Whisper chain used by
-        # installed DimOS VoiceInput. Never publish to its human_input stream:
+        # installed dimOS VoiceInput. Never publish to its human_input stream:
         # only the client can submit the returned draft with explicit Send.
         from dimos.stream.audio.decode import decode_audio_bytes
         from dimos.stream.audio.pipeline import whisper_pipeline

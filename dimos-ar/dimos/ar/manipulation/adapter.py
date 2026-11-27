@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 class _QuiescedExecution:
     """Local teardown after parking already confirmed cancellation remotely.
 
-    DimOS stops module RPC services concurrently. Its default teardown would issue
+    dimOS stops module RPC services concurrently. Its default teardown would issue
     another cancellation into a coordinator that may already have closed its RPC.
     Only a completed shutdown handshake may use this local cancellation receipt.
     """
@@ -292,7 +292,7 @@ class DimOSManipulationAdapter:
             # Publish recovery before runtime clears its stopped flag. Serialize
             # with polling so an older paused response cannot relatch the stop.
             self.protection = self.module._control_coordinator.protection_status()
-        # DimOS main returns to IDLE on a confirmed cancel. Its EXECUTING state
+        # dimOS main returns to IDLE on a confirmed cancel. Its EXECUTING state
         # stays latched for uncertain outcomes, including a cancellation timeout.
         stopped = self.cancel()
         confirmed = stopped.status in {

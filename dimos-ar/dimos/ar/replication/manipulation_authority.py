@@ -2,7 +2,7 @@
 
 The WebSocket owner injects these fields after validating the source connection.
 They are not client claims. Monotonic deadlines share the same host clock across
-DimOS workers. Runtime control code remains independent of the AR coordinator.
+dimOS workers. Runtime control code remains independent of the AR coordinator.
 """
 
 from __future__ import annotations

@@ -76,7 +76,7 @@
 
 <br>
 
-A blueprint is a DimOS composition of robot, planning and ARModule.
+A blueprint is a dimOS composition of robot, planning and ARModule.
 
 Run one with `dimos run dimos-ar.<name>`, or pick it in the launcher.
 
@@ -114,10 +114,10 @@ You switch between **Manual** (spatial controls) and **Agent** mode in the main 
 
 <br>
 
-The launcher is a small local web app that installs DimOS, starts the robot stack with ARModule and the WebXR server, and shows the host IP, PIN, and WebXR URL.
+The launcher is a small local web app that installs dimOS, starts the robot stack with ARModule and the WebXR server, and shows the host IP, PIN, and WebXR URL.
 
 <p align="center">
-  <img src="assets/launcher.png" alt="DimOS launcher ready to start, with blueprint, robot source, robot config, and Run blueprint controls" width="800" />
+  <img src="assets/launcher.png" alt="dimOS launcher ready to start the Unitree Go2 AR example recording, with the complete setup and Run blueprint controls visible" width="800" />
 </p>
 
 Double-click [`Start Launcher.command`](launcher/Start%20Launcher.command), or run:
@@ -127,19 +127,19 @@ Double-click [`Start Launcher.command`](launcher/Start%20Launcher.command), or r
 ```
 
 1. Open **http://127.0.0.1:8790**, keep the terminal open.
-2. **Install** DimOS, or point to an existing install. The tested revision is in [`.dimos-revision`](.dimos-revision).
+2. **Install** dimOS, or point to an existing install. The tested revision is in [`.dimos-revision`](.dimos-revision).
 3. Pick the robot (**Go2** / **OpenYAM**) and source (**Device**, **Simulated**, **Recording**).
 4. Choose [localization](#localization-alignment), press **Start**, and use the displayed **WebXR URL** for WebXR or the host IP and **PIN** for Spectacles.
 
-Install Graphviz on the DimOS host to generate blueprint diagrams
+Install Graphviz on the dimOS host to generate blueprint diagrams
 (`sudo apt install graphviz` on Ubuntu or `brew install graphviz` on macOS).
-Run `dot -V` in the same environment that launches DimOS to confirm it is available.
+Run `dot -V` in the same environment that launches dimOS to confirm it is available.
 
 Agent mode needs an `OPENAI_API_KEY`.
 
 WebXR dictation uses the browser's speech API when available, with local Whisper
-as a fallback. The standard DimOS agent dependencies include its Whisper backend.
-For a minimal install, add only the speech dependencies in the selected DimOS
+as a fallback. The standard dimOS agent dependencies include its Whisper backend.
+For a minimal install, add only the speech dependencies in the selected dimOS
 environment from the repository root:
 
 ```sh
@@ -157,7 +157,7 @@ remains explicit.
 
 <br>
 
-These are external DimOS blueprints. The namespace is the package name.
+These are external dimOS blueprints. The namespace is the package name.
 
 ```sh
 dimos run dimos-ar.unitree-go2-ar
@@ -165,9 +165,9 @@ dimos run dimos-ar.unitree-go2-ar-agentic
 dimos run dimos-ar.openyam-ar-planner
 ```
 
-A real Go2 takes `--robot-ip`. Install Graphviz on the DimOS host to generate blueprint diagrams
+A real Go2 takes `--robot-ip`. Install Graphviz on the dimOS host to generate blueprint diagrams
 (`sudo apt install graphviz` on Ubuntu or `brew install graphviz` on macOS).
-Run `dot -V` in the same environment that launches DimOS to confirm it is available.
+Run `dot -V` in the same environment that launches dimOS to confirm it is available.
 
 Agent mode needs an `OPENAI_API_KEY`.
 
@@ -184,9 +184,9 @@ Headset tracking, robot odometry and arm kinematics use different coordinate sys
 </p>
 
 <p align="center">
-  <img src="assets/localization_exchange.svg" alt="ARModule aligns the headset tracking frame and robot odometry frame with the shared map, using headset and DimOS observations." width="800" />
+  <img src="assets/localization_exchange.svg" alt="ARModule aligns the headset tracking frame and robot odometry frame with the shared map, using headset and dimOS observations." width="800" />
   <br />
-  <sub>ARModule localizes headset and robot; DimOS executes.</sub>
+  <sub>ARModule localizes headset and robot; dimOS executes.</sub>
 </p>
 
 > ⓘ **Policy.** AprilTag and VPS can work together. Tag localization succeeds without VPS; later VPS registration can adopt the scanned map once.
@@ -229,7 +229,7 @@ Set them in the launcher, or as `armodule.fiducial_marker_mounts` in `~/.config/
 
 VPS registers camera observations against a scanned visual map. Its first connected registration can adopt that map as the shared reference; existing content stays in place physically. Later fixes update alignment beneath that reference.
 
-For a saved DimOS LiDAR map on Go2, set **Saved LiDAR map** in the launcher. Choose a DimOS keyframe map name or a `.map.db` file. The launcher configures `armodule.localization.native_map_file` and `pgovoxelmapper.map_file` together. Set both when using the CLI. For a legacy `.pc2.lcm` point cloud, record a keyframe map with the native `unitree-go2-map` blueprint or clear **Saved LiDAR map** to start with live mapping. DimOS registers odometry in the saved map and ARModule connects that reference to the shared map. LiDAR and VPS maps have separate origins until registered.
+For a saved dimOS LiDAR map on Go2, set **dimOS saved map** under Localization. Enter a dimOS keyframe map name or browse to a `.map.db` file. Enable Fiducial marker or VPS for headset localization. The launcher configures `armodule.localization.native_map_file` and `pgovoxelmapper.map_file` together. Set both when using the CLI. For a legacy `.pc2.lcm` point cloud, record a keyframe map with the native `unitree-go2-map` blueprint or clear **dimOS saved map** to start with live mapping. dimOS registers odometry in the saved map and ARModule connects that reference to the shared map. LiDAR and VPS maps have separate origins until registered.
 
 | Provider | Status |
 | --- | --- |
@@ -243,12 +243,12 @@ Set them in the launcher, or export `MULTISET_CLIENT_ID` and `MULTISET_CLIENT_SE
 
 ## ARModule
 
-ARModule is an add-on to [DimOS](https://github.com/dimensionalOS/dimos). It does not modify DimOS source. It provides the [capabilities](#capabilities) by passing DimOS data and streams through to the AR clients and back: an adapter, with spatial alignment as the part that places that data in the room. Any DimOS blueprint can include it. Connect the In/Out streams and the clients see the robot.
+ARModule is an add-on to [dimOS](https://github.com/dimensionalOS/dimos). It does not modify dimOS source. It provides the [capabilities](#capabilities) by passing dimOS data and streams through to the AR clients and back: an adapter, with spatial alignment as the part that places that data in the room. Any dimOS blueprint can include it. Connect the In/Out streams and the clients see the robot.
 
 ```mermaid
 flowchart LR
-  Robot["Robot"] <--> DimOS["DimOS<br>hardware · sensors · planning · execution"]
-  DimOS <--> ARModule["ARModule<br>localization · sessions · interaction authority"]
+  Robot["Robot"] <--> dimOS["dimOS<br>hardware · sensors · planning · execution"]
+  dimOS <--> ARModule["ARModule<br>localization · sessions · interaction authority"]
   ARModule <-->|"WebSocket control + bulk"| Core["ClientCore"]
   Core <--> WebXR["WebXR"]
   Core <--> Specs["SPECS"]
@@ -263,7 +263,7 @@ The package lives in [`dimos-ar/dimos/ar/`](dimos-ar/dimos/ar/). After the modul
 
 | Package | Responsibility |
 | --- | --- |
-| [`module.py`](dimos-ar/dimos/ar/module.py) | DimOS composition and In/Out surface |
+| [`module.py`](dimos-ar/dimos/ar/module.py) | dimOS composition and In/Out surface |
 | `websocket/` | Client sessions, control and bulk transport |
 | `replication/` | Shared state across clients and who holds editing control |
 | `localization/` | Shared-map alignment: AprilTag, VPS and native-map registration |
@@ -291,7 +291,7 @@ SPECS and WebXR implement the protocol and provide the UI.
 
 <br>
 
-A native Lens for Spectacles, built in Lens Studio. Hands pinch the panels and grab goals or the arm target in space. The navigation map opens below the menu when navigation maps are available. Poke the map with a finger to place a navigation goal; pinch or drag to pan, drag the robot marker to reposition a goal, and use two hands to scale the map. The Capabilities page controls map visibility and navigation via the map. The main menu provides the emergency stop.
+A native Lens for Spectacles, built in Lens Studio. Hands pinch the panels and grab goals or the arm target in space. The navigation map opens below the menu when navigation maps are available. Poke the map or aim the laser and pinch briefly to place a navigation goal. Hold and drag to pan, drag the robot marker to reposition a goal, and use two hands to scale the map. Poke the compass or follow pin to change the map view. The Capabilities page controls map visibility and navigation via the map. The main menu provides the emergency stop.
 
 <p align="center">
   <img src="assets/specs_golden_menu.png" alt="SPECS runtime menu" width="48%" />

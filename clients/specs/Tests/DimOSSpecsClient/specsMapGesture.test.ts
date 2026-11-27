@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { SpecsMapGesture } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsMapGesture";
+import { SpecsMapSession, SpecsMapGesture } from "../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsMapGesture";
 import type { NavigationMapSnapshot } from "DimOSARClient.lspkg/Scripts/DimOSARClient/ClientContracts";
 
 function fixture() {
@@ -60,19 +60,17 @@ it("converts bounded occupancy once per immutable grid", async () => {
   expect(() => pixels.update({ ...grid, width: 241 })).toThrow();
 });
 
-it("projects robot, target, clipped route and bounded height points into the dock", async () => {
+it("projects robot, target, clipped route into the dock", async () => {
   const { projectSpecsMap } = await import("../../Assets/Scripts/DimOSSpecsClient/navigation/SpecsMapGesture");
   const { gesture, snapshot } = fixture();
   const frame = projectSpecsMap({ ...snapshot, robot: [8, 0, 0], target: [1, 0],
-    route: [[-10, 0, 10, 0]], heights: [[0, 0, 1.5], [9, 9, 1]] }, gesture.viewport, 0.22);
+    route: [[-10, 0, 10, 0]] }, gesture.viewport, 0.22);
   expect(frame.robotVisible).toBe(false);
   expect(frame.recenter?.[0]).toBeCloseTo(0.11 * 0.89);
   expect(frame.target?.[0]).toBeCloseTo(0.0275);
   expect(frame.route).toHaveLength(1);
-  expect(frame.route[0][0]).toBeCloseTo(-0.11);
-  expect(frame.route[0][2]).toBeCloseTo(0.11);
-  expect(frame.heights).toHaveLength(1);
-  expect(frame.heights[0].hue).toBeCloseTo(0);
+  expect(frame.route[0][0]).toBeCloseTo(-0.1085);
+  expect(frame.route[0][2]).toBeCloseTo(0.1085);
   expect(frame.scaleM).toBe(2);
 });
 
@@ -84,12 +82,12 @@ it("subscribes only while open and ignores retired goal feedback", async () => {
     requestNavigationCancellation: vi.fn(async () => {}),
     submitNavigationMapGoal: vi.fn(() => new Promise<void>(resolve => { complete = resolve; })) };
   const feedback = vi.fn(), map = new SpecsMapSession(session, feedback);
-  map.update(true, snapshot, true, true);
-  map.update(true, snapshot, true, true);
+  map.update(true, snapshot, true, true, 0);
+  map.update(true, snapshot, true, true, 0);
   expect(session.setNavigationMapViewport).toHaveBeenCalledTimes(1);
   map.gesture.begin("hand", "face", [0, 0], 1, 0, true); map.gesture.release("hand", [0, 0], 1.1, 0);
   expect(session.submitNavigationMapGoal).toHaveBeenCalledOnce();
-  map.update(false, null, false, true);
+  map.update(false, null, false, true, 1);
   expect(session.setNavigationMapViewport).toHaveBeenLastCalledWith(null);
   complete(); await Promise.resolve();
   expect(feedback).toHaveBeenCalledTimes(1);
@@ -103,9 +101,9 @@ it("does not publish an old goal result after a replay seek", async () => {
     requestNavigationCancellation: vi.fn(async () => {}),
     submitNavigationMapGoal: vi.fn(() => new Promise<void>(resolve => { complete = resolve; })) };
   const feedback = vi.fn(), map = new SpecsMapSession(session, feedback);
-  map.update(true, snapshot, true, true);
+  map.update(true, snapshot, true, true, 0);
   map.gesture.begin("hand", "face", [0, 0], 1, 0, true); map.gesture.release("hand", [0, 0], 1.1, 0);
-  map.update(true, { ...snapshot, source_generation: 2 }, true, true);
+  map.update(true, { ...snapshot, source_generation: 2 }, true, true, 0.1);
   complete(); await Promise.resolve();
   expect(feedback).toHaveBeenCalledTimes(1);
   expect(session.cancelPendingNavigationMapGoal).toHaveBeenCalledOnce();
@@ -122,4 +120,18 @@ it("preserves a panned viewport across a seek but recenters when the odometry re
   gesture.update({ ...snapshot, odom_reference_id: "new-odom", source_generation: 3, robot: [4, 5, 0] }, false, true);
   expect(gesture.viewport.followingRobot).toBe(true);
   expect(gesture.viewport.centerM).toEqual([4, 5]);
+});
+
+it("coalesces background redraws while keeping target and source changes immediate", () => {
+  const { snapshot } = fixture();
+  const session = { setNavigationMapViewport: vi.fn(), cancelPendingNavigationMapGoal: vi.fn(),
+    submitNavigationMapGoal: vi.fn(async () => {}) };
+  const map = new SpecsMapSession(session, vi.fn());
+  const newer = { ...snapshot, snapshot_sequence: 2 };
+  expect(map.update(true, snapshot, true, true, 0)).toBe(snapshot);
+  expect(map.update(true, newer, true, true, 0.2)).toBe(snapshot);
+  expect(map.update(true, newer, true, true, 0.4)).toBe(newer);
+  const goal = { ...newer, target: [1, 2] as const };
+  expect(map.update(true, goal, true, true, 0.41)).toBe(goal);
+  expect(map.update(true, null, true, true, 0.42)).toBeNull();
 });

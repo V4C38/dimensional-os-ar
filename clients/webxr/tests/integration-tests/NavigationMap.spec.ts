@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { setSelection } from "./fixtures/Input";
+import { moveInput, pointIndexAtButton, setSelection, summonMenu, tapSelection } from "./fixtures/Input";
 import { bootstrap, snapshot } from "./fixtures/Runtime";
 
 async function openMap(page: Page) {
@@ -69,8 +69,7 @@ for (const mode of ["controller", "hand"] as const) {
     await setSelection(page, 0);
     expect(goals()).toHaveLength(0);
 
-    await setSelection(page, 1);
-    await setSelection(page, 0);
+    await tapSelection(page);
     await expect.poll(goals).toHaveLength(1);
     const target = goals()[0].map_target.position as [number, number];
     expect(target[0]).toBeLessThan(0);
@@ -84,6 +83,68 @@ for (const mode of ["controller", "hand"] as const) {
     runtime.close();
   });
 }
+
+test("drags a map goal while the other wrist moves the attached menu", async ({ page }) => {
+  const runtime = await bootstrap(page, "hand", { navigationMap: "live" });
+  await openMap(page);
+  const anchor = (action: "close" | "move" | "read") => page.evaluate(async action => {
+    const w = window as any;
+    const app = w.xb.core.scene.children.find((object: any) => object.client?.manipulation);
+    if (action === "close") app.client.ui.menuOpen = false;
+    if (action === "move") {
+      const hand = w.questDevice.hands.left;
+      hand.position.x += 0.12;
+      const turn = app.mainMenu.panel.quaternion.clone().setFromAxisAngle(app.mainMenu.panel.position.clone().set(0, 1, 0), 0.2);
+      turn.multiply(turn.clone().set(hand.quaternion.x, hand.quaternion.y, hand.quaternion.z, hand.quaternion.w));
+      hand.quaternion.set(turn.x, turn.y, turn.z, turn.w);
+    }
+    await new Promise<void>(resolve => app.session.requestAnimationFrame(() =>
+      app.session.requestAnimationFrame(() => resolve())));
+    const panel = app.mainMenu.panel;
+    return { hand: app.inputController.panels.menuAnchor.source?.handedness ?? null,
+      captured: app.inputController.map.capturing,
+      position: panel.position.toArray(), rotation: panel.quaternion.toArray() };
+  }, action);
+  await anchor("close");
+  await summonMenu(page);
+  expect((await anchor("read")).hand).toBe("left");
+  await page.waitForTimeout(250);
+  await aimAtMap(page, "Navigation map robot sphere");
+  await setSelection(page, 1);
+  // This is a held interaction: use a drag, which remains valid regardless of
+  // how long the frame-synchronized anchor checks take on software rendering.
+  await moveInput(page, [-0.025, 0, 0], 150);
+  const held = await anchor("read");
+  expect(held.captured).toBe(true);
+  expect(await anchor("move")).toEqual(held);
+  await setSelection(page, 0);
+  await expect.poll(() => runtime.commands.filter(command => command.map_target)).toHaveLength(1);
+  await expect.poll(async () => (await anchor("read")).position).not.toEqual(held.position);
+  expect((await anchor("read")).hand).toBe("left");
+  runtime.close();
+});
+
+test("finger pokes toggle the compass and follow pin without placing a goal", async ({ page }) => {
+  const runtime = await bootstrap(page, "hand", { navigationMap: "live" });
+  await openMap(page);
+  const controlState = () => page.evaluate(() => {
+    const w = window as any;
+    const map = w.xb.core.scene.children.find((object: any) => object.client?.manipulation).inputController.map;
+    return { compass: map.compassEnabled, follow: map.viewport.followingRobot };
+  });
+  expect(await controlState()).toEqual({ compass: true, follow: true });
+  for (const [label, expected] of [
+    ["Compass orientation", { compass: false, follow: true }],
+    ["Follow robot", { compass: false, follow: false }],
+  ] as const) {
+    for (const distance of [0.05, 0.02, 0.005, 0.04]) {
+      await pointIndexAtButton(page, label, distance, true);
+    }
+    expect(await controlState()).toEqual(expected);
+  }
+  expect(runtime.commands.some(command => command.map_target)).toBe(false);
+  runtime.close();
+});
 
 test("map-only replay subscribes while navigation motion stays unavailable", async ({ page }) => {
   const runtime = await bootstrap(page, "controller", { navigationMap: "recording" });

@@ -63,7 +63,7 @@ export function helloAt(tsClient: number, capabilities?: Partial<Capabilities>):
       },
       localization: { available: true, reason: null },
       estop: { available: true, reason: null },
-      agent: { available: false, reason: "current blueprint has no DimOS agent" },
+      agent: { available: false, reason: "current blueprint has no dimOS agent" },
       ...capabilities,
     },
   };

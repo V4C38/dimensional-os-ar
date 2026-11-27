@@ -8,7 +8,7 @@ clients update their protocol module in the same change.
 ## Conventions
 
 - **Version 2 interaction messages** supplement the robot telemetry and localization inventory below.
-- **Wire frame is shared `map`**, identified by `shared_frame_id`, in DimOS's
+- **Wire frame is shared `map`**, identified by `shared_frame_id`, in dimOS's
   right-handed Z-up metric axes. ARModule composes spatial frames; each client
   performs its host axis conversion. Native sensing, planning and execution retain
   their native frames behind this boundary.
@@ -85,7 +85,7 @@ unchanged; transport must not deliberately make a fresh image stale.
 
 ## Transport
 
-- Plain WebSocket on port **8787**. The DimOS machine runs the server; AR devices
+- Plain WebSocket on port **8787**. The dimOS machine runs the server; AR devices
   connect as clients.
 - JSON text frames for control and telemetry. Binary frames for
   `localization_observations` (client → server) and `lidar` (server → client).
@@ -105,7 +105,7 @@ unchanged; transport must not deliberately make a fresh image stale.
 Robot poses, navigation, LiDAR, presence and localization results use the same
 shared **`map`** frame. `T_A_B` maps coordinates in B into A. A localization
 result is `T_map_tracking`, not the current physical headset/camera pose. All use
-DimOS's axes:
+dimOS's axes:
 
 | Axis | Direction |
 |------|-----------|
@@ -113,7 +113,7 @@ DimOS's axes:
 | Y | Left |
 | Z | Up |
 
-Right-handed, Z-up, metres. This is the ROS convention that DimOS follows
+Right-handed, Z-up, metres. This is the ROS convention that dimOS follows
 throughout.
 
 Poses are position `[x, y, z]` and orientation `[qx, qy, qz, qw]` — quaternion,
@@ -430,7 +430,7 @@ connection, and replies with `hello`.
     },
     "localization": { "available": true, "reason": null },
     "estop": { "available": true, "reason": null },
-    "agent": { "available": false, "reason": "current blueprint has no DimOS agent" },
+    "agent": { "available": false, "reason": "current blueprint has no dimOS agent" },
     "manipulation": { "available": false, "reason": "No arm" },
     "object_detection": { "available": false, "reason": "No detector" }
   }
@@ -500,7 +500,7 @@ is configured. Capture policy describes geometry, not provider identity.
 provider is configured. `lidar`, `navigation`, and `estop` may also be
 `available=false` with `reason` when the selected robot profile does not offer
 them. `agent` is `available=false` with `reason` when the current blueprint
-did not configure a DimOS agent. Capture geometry remains a `capture_policy` on
+did not configure a dimOS agent. Capture geometry remains a `capture_policy` on
 each `localization_observations_request`; it does not identify the provider inventory.
 
 ## Outbound messages (server → client)
@@ -551,7 +551,7 @@ Older servers, replay, and stationary sources may omit these fields.
 
 **`nav.state`:** `"idle"` | `"following_path"` | `"resolved"`
 
-ARModule derives this from DimOS `path` and `goal_reached`. DimOS also declares a
+ARModule derives this from dimOS `path` and `goal_reached`. dimOS also declares a
 `recovery` phase on `navigation_state`, but that stream is never published; it is
 not on the wire until it can actually be emitted.
 
@@ -560,7 +560,7 @@ not on the wire until it can actually be emitted.
 
 Where the robot is going, use **`nav_goal`** (route + terminal pose) and **`pose`**
 (robot). `state.nav` reflects any active navigation — `nav_goal_request`, MCP
-`set_goal`, or any other DimOS goal source:
+`set_goal`, or any other dimOS goal source:
 
 - **`following_path`** while a non-empty planner path is active
 - **`resolved`** when `goal_reached` fires (success or failure)
@@ -568,8 +568,8 @@ Where the robot is going, use **`nav_goal`** (route + terminal pose) and **`pose
 
 ARModule does not record who started navigation.
 
-**`agent.idle`:** `true` when no DimOS agent is configured, before the first
-agent turn, or when the DimOS `Agent` reports idle. `false` while the agent is
+**`agent.idle`:** `true` when no dimOS agent is configured, before the first
+agent turn, or when the dimOS `Agent` reports idle. `false` while the agent is
 processing. Always present, same shape as `state.nav`.
 
 ### `agent_message`
@@ -903,7 +903,7 @@ and use `path_poses: []` when the map/odometry is unavailable or planning fails.
 Preview coordinates use the same shared-map projection as active paths.
 
 Active navigation in shared `map`: the planned route plus the terminal pose where
-the robot intends to finish. Sent whenever DimOS publishes a path update.
+the robot intends to finish. Sent whenever dimOS publishes a path update.
 
 ```json
 {
@@ -917,13 +917,13 @@ the robot intends to finish. Sent whenever DimOS publishes a path update.
 | Field | Notes |
 |-------|-------|
 | `pose` | Terminal pose in shared `map` as `[x, y, z, yaw]` radians — maps to the last
-  `PoseStamped` on DimOS `path`, projected rigidly into shared map. This duplicates the last `path_poses` entry; clients should treat
+  `PoseStamped` on dimOS `path`, projected rigidly into shared map. This duplicates the last `path_poses` entry; clients should treat
   `pose` as authoritative for the target. |
 | `path_poses` | Route polyline as `[x, y, z, yaw]` waypoints — maps to `Path.poses`.
-  Same units and rounding as `pose`. Yaw comes from each DimOS path pose
+  Same units and rounding as `pose`. Yaw comes from each dimOS path pose
   (approach direction along the segment). Wire values are rounded to 3 decimal
   places on position and 4 on yaw (~1 mm, ~0.006°). |
-| `ts` | DimOS `Path.ts` (same clock family as `pose.ts` / `ts_odom`). |
+| `ts` | dimOS `Path.ts` (same clock family as `pose.ts` / `ts_odom`). |
 
 Empty `path_poses` clears the visualization — navigation finished, was cancelled,
 or no plan exists. `pose` is omitted on clear:
@@ -941,7 +941,7 @@ or no plan exists. `pose` is omitted on clear:
 | Offset | Size | Field |
 |--------|------|-------|
 | 0 | 4 | FourCC `0x4C444152` (`"LDAR"`) |
-| 4 | 8 | `ts` float64, DimOS `PointCloud2.ts` |
+| 4 | 8 | `ts` float64, dimOS `PointCloud2.ts` |
 | 12 | 4 | `point_count` uint32 |
 | 16 | `point_count * 12` | Points: `[x, y, z]` float32 triplets in shared `map` |
 
@@ -1071,11 +1071,11 @@ camera position at +20.
 `width` and `height` must match the decoded JPEG dimensions; ARModule rejects a
 record whose calibration describes a different image size.
 ARModule undistorts to pinhole when a provider needs it (VPS always; fiducial marker
-handles fisheye corners internally via DimOS).
+handles fisheye corners internally via dimOS).
 
 **Camera pose** is the **camera optical frame** (X right, Y down, Z along the
 view direction) expressed in the caller's own tracking frame. That frame must be
-right-handed, gravity-aligned Z-up and metric — the same convention as DimOS
+right-handed, gravity-aligned Z-up and metric — the same convention as dimOS
 `odom`. A left-handed client converts its camera pose on the way in and
 converts `localization_result.position` and `localization_result.orientation`
 back on the way out.
@@ -1140,7 +1140,7 @@ a normal goal even if no preview path is available.
 
 Direct drive in m/s and rad/s, not a raw `[-1, 1]` stick deflection. Client
 command (`*_request`), same naming as `nav_goal_request`. ARModule publishes on
-DimOS `tele_cmd_vel: Out[Twist]`; `MovementManager` muxes with planner
+dimOS `tele_cmd_vel: Out[Twist]`; `MovementManager` muxes with planner
 `nav_cmd_vel`. Body-relative physical velocity; no world-position transform applies.
 
 | Field | Type | Notes |
@@ -1211,7 +1211,7 @@ fenced. A failure to confirm controlled cancellation retains the native stopped
 or uncertain guard.
 
 The repository's Go2 blueprints use `ARReplanningAStarPlanner`, a subclass of
-the installed native planner. Its private DimOS `ar_navigation_status` topic
+the installed native planner. Its private dimOS `ar_navigation_status` topic
 captures the immutable submitted goal timestamp and accepted/succeeded/failed
 phase under the native planner lock. ARModule ignores uncorrelated native Bool
 terminal messages after an AR goal has been issued. A delayed old-goal terminal
@@ -1351,7 +1351,7 @@ Response: `state`.
 |-------|------|-------|
 | `text` | string | Required. Non-blank after trim. Max 4000 characters. No audio. |
 
-Client command (`*_request`). ARModule publishes the string on DimOS
+Client command (`*_request`). ARModule publishes the string on dimOS
 `human_input: Out[str]` when `hello.capabilities.agent` is available and the
 stream is wired. Last-command-wins; conversation is process-global.
 
@@ -1402,7 +1402,7 @@ on `ARModule`. Freshness is server receive time (2 s), not inbound `ts`.
 
 | Field | Notes |
 |-------|-------|
-| `position` | Shared-map metres, DimOS Z-up. Same fields as outbound robot `pose`. |
+| `position` | Shared-map metres, dimOS Z-up. Same fields as outbound robot `pose`. |
 | `orientation` | Scalar-last quaternion. Zero quaternion is rejected. |
 | `ts` | Lens `getTime()` at capture (seconds since start). Metadata only. |
 
@@ -1437,9 +1437,9 @@ noun (`client_pose`). Binary payloads use a bare noun
 (`localization_observations`). Handshake-only: `hello_request`. Server-initiated
 exception: `localization_observations_request`.
 
-**Agent conversation.** `user_message_request` is wearer text to the DimOS
+**Agent conversation.** `user_message_request` is wearer text to the dimOS
 agent (gated on `hello.capabilities.agent`). `agent_message` is assistant text
-only. `agent_skill` is a tool invocation, not a chat turn. On the DimOS side
+only. `agent_skill` is a tool invocation, not a chat turn. On the dimOS side
 the inbound string is published as `human_input: Out[str]`.
 
 **Browser dictation.** When `hello.speech_transcription` is true and agent capability
@@ -1452,15 +1452,15 @@ with optional codec parameters. One upload slot is shared with localization: aud
 waits for an existing upload and cancelling localization cannot cancel audio.
 The server permits one pending recording per client and at most four across clients;
 the native transcriber admits only one operation and keeps admission after cancellation
-until that work actually finishes. It uses installed DimOS audio decoding and local
-Whisper. First use can prepare/download the configured model under normal DimOS behavior;
+until that work actually finishes. It uses installed dimOS audio decoding and local
+Whisper. First use can prepare/download the configured model under normal dimOS behavior;
 preparation has a 180-second allowance and warm transcription has 45 seconds.
 Control remains responsive during both operations.
 
 The server advertises and admits local dictation only when PyAV
 and either `faster-whisper` or `openai-whisper` are
 installed. The focused `dimos-ar[speech]` extra supplies faster-whisper without
-requiring the full DimOS web or agent extras. Missing prerequisites are described
+requiring the full dimOS web or agent extras. Missing prerequisites are described
 by `hello.speech_transcription_reason`; probing availability never loads a model.
 
 Correlated control replies use
@@ -1476,7 +1476,7 @@ an agent goal until the wearer explicitly presses Send.
 Paired requests: `hello_request` → `hello`, `state_request` → `state`,
 `localization_observations_request` → `localization_observations` →
 `localization_result` (on success), `nav_goal_request` → revisioned
-`interaction_state` navigation facts (via DimOS planner). `nav_joystick_request` takes effect through DimOS
+`interaction_state` navigation facts (via dimOS planner). `nav_joystick_request` takes effect through dimOS
 `MovementManager` (`tele_cmd_vel`).
 `estop_request` and `lidar_settings_request` take effect through
 a broadcast `state` update. `user_message_request` takes effect through outbound `agent_message`
@@ -1499,7 +1499,7 @@ preview for that connection. Neither condition prevents normal goal confirmation
 
 `hello.server_info` is an optional object with optional string fields `robot_ip`,
 `dimos_version`, and `armodule_version`. Versions describe installed packages in
-ARModule's running process. The robot address comes from effective DimOS configuration;
+ARModule's running process. The robot address comes from effective dimOS configuration;
 replay/simulation is displayed as `Simulated`. Missing metadata means unavailable,
 not disconnected. Older servers may omit the object; clients ignore unknown fields.
 The page's server address remains distinct from the robot address.
@@ -1507,7 +1507,7 @@ The page's server address remains distinct from the robot address.
 ## Localization qualification and coordinate correction
 
 The VPS REST frame conversion and robot/headset composition use the normalized
-right-handed Z-up VPS map frame. DimOS's optional premap frame is independent;
+right-handed Z-up VPS map frame. dimOS's optional premap frame is independent;
 a transform named `world -> map` is not automatically a VPS registration. ARModule
 no longer polls and relabels that transform as an odom/VPS anchor.
 
@@ -1549,7 +1549,7 @@ in (0, 180], and preference is finite and nonnegative. Changes apply at restart.
 `robot_timing_uncertainty_s` settings remain readable for configuration compatibility;
 they do not expire accepted independent map alignments or impose stillness.
 A robot clock/frame reset retires pending work and connections; AR navigation
-requires restarting DimOS mapping with a fresh map.
+requires restarting dimOS mapping with a fresh map.
 
 The rigid metric boundary is defined under
 [metric source calibration](#metric-source-calibration). The read-only
@@ -1590,7 +1590,7 @@ and reply only after fresh joint feedback confirms zero within the configured jo
 0.5 seconds, or report failure. They never clear emergency stop. Shutdown parking
 is capped at 20% and a 55-second operation budget inside the supervisor’s
 60-second response deadline; the launcher then proceeds with shutdown even
-if parking fails or times out. The supervisor keeps DimOS alive until the attempt
+if parking fails or times out. The supervisor keeps dimOS alive until the attempt
 finishes. Power loss and SIGKILL cannot provide orderly parking.
 
 Following `update` accepts `speed_scale` with the same range/default; the server

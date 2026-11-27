@@ -69,7 +69,7 @@ export class WebXRRobotPresenter {
     this.gizmo.name = "RobotPoseGizmo";
     this.gizmo.scale.setScalar(0.8);
     for (const [axis, color] of [
-      // DimOS +X forward (red), +Y left (green), +Z up (blue).
+      // dimOS +X forward (red), +Y left (green), +Z up (blue).
       [new THREE.Vector3(0, 0, -1), 0xff0000],
       [new THREE.Vector3(-1, 0, 0), 0x00ff00],
       [new THREE.Vector3(0, 1, 0), 0x0000ff],

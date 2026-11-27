@@ -11,7 +11,8 @@ function setup() {
     const object: any = { name, enabled: true, setParent: vi.fn(), destroy: vi.fn(),
       getTransform: () => ({ setLocalPosition: vi.fn(), getWorldTransform: () => ({ inverse: () => ({ multiplyPoint: (value: vec3) => value }) }) }),
       createComponent: (type: string) => type === "Physics.ColliderComponent" ? { shape: {} } :
-        { onTriggerCanceled: { add: (handler: (event: any) => void) => { object.cancel = handler; } } } };
+        (object.interactable = { targetingMode: TargetingMode.Direct | TargetingMode.Indirect,
+          onTriggerCanceled: { add: (handler: (event: any) => void) => { object.cancel = handler; } } }) };
     targets.set(name, object); return object;
   } };
   vi.stubGlobal("global", { scene, deviceInfoSystem: { isEditor: () => false } });
@@ -61,10 +62,9 @@ it("finishes a poke when its active targeting provider disappears on release", (
   expect(h.ports.submit).toHaveBeenCalledOnce();
 });
 
-it("does not send a face-tap goal for cursor or pinch input", () => {
+it("does not send a face-tap goal for cursor or direct pinch input", () => {
   for (const [id, trigger, mode] of [
     [InteractorInputType.Mouse, InteractorTriggerType.Poke, TargetingMode.Poke],
-    [InteractorInputType.LeftHand, InteractorTriggerType.Pinch, TargetingMode.Indirect],
     [InteractorInputType.RightHand, InteractorTriggerType.Pinch, TargetingMode.Direct],
   ]) {
     const h = setup(), hand = h.hand(id, "NavigationMapFaceHit"); h.hands.push(hand);
@@ -152,4 +152,34 @@ it("does not capture a face hit when the projected ray misses the circular map",
   hand.startPoint = new vec3(12, 10, 0); hand.isTriggering = true; h.hands.push(hand);
   h.input.tick(1, 0.016, 0);
   expect(h.gesture.active).toBe(false); expect(h.ports.submit).not.toHaveBeenCalled();
+});
+
+it("sends a goal on a short indirect pinch and cancels a held press on close", () => {
+  const h = setup(), hand = h.hand(InteractorInputType.LeftHand, "NavigationMapFaceHit");
+  hand.currentTrigger = InteractorTriggerType.Pinch;
+  hand.activeTargetingMode = TargetingMode.Indirect;
+  h.hands.push(hand);
+  hand.isTriggering = true; h.input.tick(1, .016, 0);
+  hand.isTriggering = false; h.input.tick(1.1, .016, 0);
+  expect(h.ports.submit).toHaveBeenCalledOnce();
+  hand.isTriggering = true; h.input.tick(2, .016, 0);
+  h.input.setEnabled(false); h.input.setEnabled(true);
+  h.input.tick(2.1, .016, 0);
+  hand.isTriggering = false; h.input.tick(2.2, .016, 0);
+  expect(h.ports.submit).toHaveBeenCalledOnce();
+});
+it("toggles compass and follow after finger targeting disappears on withdrawal", () => {
+  const h = setup();
+  for (const [target, value] of [["NavigationMapCompassHit", () => h.gesture.compassEnabled],
+    ["NavigationMapFollowHit", () => h.gesture.viewport.followingRobot]] as const) {
+    expect(h.targets.get(target).interactable.targetingMode & TargetingMode.Poke).toBeTruthy();
+    const hand = h.hand(InteractorInputType.LeftHand, target);
+    h.hands.splice(0, 1, hand);
+    hand.targetHitPosition = new vec3(0, 0, 0);
+    hand.isTriggering = true; h.input.tick(1, .016, 0);
+    hand.targetHitPosition = hand.startPoint = hand.direction = null;
+    hand.isTriggering = false; h.input.tick(1.1, .016, 0);
+    expect(value()).toBe(false);
+  }
+  expect(h.ports.submit).not.toHaveBeenCalled();
 });

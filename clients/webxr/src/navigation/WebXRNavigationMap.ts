@@ -71,7 +71,9 @@ export class WebXRNavigationMap {
     new THREE.MeshBasicMaterial({ color: 0x202022 }));
   private readonly sphere = this.marker(0xffffff, 0.008);
   private readonly ghost = this.marker(0xffffff, 0.009);
-  private readonly target = this.marker(0xffffff, 0.009);
+  private readonly target = new THREE.Mesh(new THREE.ShapeGeometry(
+    new THREE.Shape().moveTo(0, 0.009).lineTo(-0.006, -0.006).lineTo(0, -0.003).lineTo(0.006, -0.006).closePath(),
+  ), new THREE.MeshBasicMaterial({ color: 0xffffff }));
   private readonly tether = new AdaptiveDashedLineRenderer(0.001, 0.002, 0.002, 1);
   private readonly rim = new THREE.Mesh(new THREE.RingGeometry(0.965, 1.015, 72), new THREE.MeshBasicMaterial({ color: 0x202022 }));
   private readonly resize = panelDragBar();
@@ -88,7 +90,9 @@ export class WebXRNavigationMap {
   private readonly heading = this.lines(1, 0xffffff);
   private readonly scaleBar = this.lines(3, 0xdddddd);
   private readonly scaleLabel = new Text();
-  private readonly route = this.lines(256, 0xffffff);
+  private readonly route = new THREE.Mesh(new THREE.BufferGeometry(),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, side: THREE.DoubleSide, vertexColors: true,
+      transparent: true, depthWrite: false }));
   private readonly points = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ size: 0.003, vertexColors: true }));
   private readonly debugRobot = new THREE.Group();
   private readonly debugBounds = new THREE.LineSegments(unitBoxEdges(), new THREE.LineBasicMaterial({ color: 0xffffff }));
@@ -168,6 +172,7 @@ export class WebXRNavigationMap {
       [.009, -.004], [-.009, -.004], [-.005, 0], [-.005, .004], [-.009, .012], [0, -.004], [0, -.017]]);
     this.mapData.add(this.plate, this.sphere, this.sphereHit, this.tether.object,
       this.heading, this.route, this.target, this.points, this.recenter, this.ghost, this.debugRobot);
+    this.route.frustumCulled = false;
     this.content.add(this.underside, this.side, this.rim, this.resize, this.resizeRight, this.mapData, this.scaleBar, this.scaleLabel, this.compass, this.pinButton);
     this.points.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(128 * 3), 3));
     this.points.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(128 * 3), 3));
@@ -206,6 +211,7 @@ export class WebXRNavigationMap {
       if (Math.hypot(east, north) >= 1e-6) worldAngle = Math.atan2(north, east);
     }
     const rotation = this.compassEnabled ? Math.PI / 2 + worldAngle - dockYaw : this.manualRotation;
+    if (this.gesture && this.compassEnabled) return;
     if (rotation !== this.mapData.rotation.z) this.mapData.rotation.z = rotation;
   }
   resetTrackingReference(): void { this.initialHeading = null; }
@@ -227,9 +233,23 @@ export class WebXRNavigationMap {
       this.content.worldToLocal(point.clone()).z >= -0.003;
   }
 
+  isPokeControl(object: THREE.Object3D): boolean { return object === this.compass || object === this.pinButton; }
+
+  activateControl(object: THREE.Object3D, time: number): boolean {
+    if (!this.open) return false;
+    if (object === this.compass) this.compassEnabled = !this.compassEnabled;
+    else if (object === this.pinButton || object === this.recenter) {
+      if (object === this.pinButton) this.viewport.toggleFollow(this.snapshot?.robot);
+      else this.viewport.follow(this.snapshot?.robot);
+      this.requestViewport(time);
+    } else return false;
+    return true;
+  }
+
   private register(mesh: THREE.Mesh, region: Region, priority: number): void {
     mesh.userData.navigationMap = this;
     mesh.userData.mapRegion = region;
+    if (this.isPokeControl(mesh)) mesh.userData.touchButton = true;
     mesh.userData.rayPriority = priority;
     if (mesh.geometry.type !== "SphereGeometry") {
       mesh.userData.proximityTarget = false;
@@ -421,18 +441,37 @@ export class WebXRNavigationMap {
       this.target.visible = Math.hypot(...target) <= radius;
       this.target.position.set(...target, 0.009);
     }
-    const route = this.route.geometry.getAttribute("position");
-    let routeCount = 0;
-    for (const [x1, y1, x2, y2] of snapshot.route) {
-      if (routeCount >= route.count / 2) break;
-      const segment = clipNavigationMapSegment(this.local([x1, y1]), this.local([x2, y2]), radius);
-      if (!segment) continue;
-      route.setXYZ(routeCount * 2, segment[0], segment[1], 0.003);
-      route.setXYZ(routeCount * 2 + 1, segment[2], segment[3], 0.003);
-      routeCount++;
+    const halfWidth = 0.00075;
+    const segments = snapshot.route.flatMap(([x1, y1, x2, y2]) => {
+      const segment = clipNavigationMapSegment(this.local([x1, y1]), this.local([x2, y2]), Math.max(0, radius - halfWidth));
+      return segment ? [segment] : [];
+    });
+    const total = segments.reduce((sum, [ax, ay, bx, by]) => sum + Math.hypot(bx - ax, by - ay), 0);
+    const fade = Math.min(0.012, total / 2);
+    const vertices: number[] = [], routeColors: number[] = [];
+    let routeDistance = 0;
+    for (const [ax, ay, bx, by] of segments) {
+      const length = Math.hypot(bx - ax, by - ay);
+      if (length < 1e-6) continue;
+      const nx = (ay - by) * halfWidth / length, ny = (bx - ax) * halfWidth / length;
+      // Add fade boundaries even when a route consists of a single long segment.
+      const cuts = [0, ...[...new Set([fade, total / 2, total - fade])].filter(d => d > routeDistance && d < routeDistance + length)
+        .map(d => (d - routeDistance) / length), 1];
+      for (let i = 1; i < cuts.length; i++) {
+        for (const [t, side] of [[cuts[i - 1], 1], [cuts[i - 1], -1], [cuts[i], 1],
+          [cuts[i - 1], -1], [cuts[i], -1], [cuts[i], 1]]) {
+          vertices.push(ax + (bx - ax) * t + nx * side, ay + (by - ay) * t + ny * side, 0.003);
+          const along = routeDistance + t * length;
+          routeColors.push(1, 1, 1, Math.max(0, Math.min(1, along / fade, (total - along) / fade)));
+        }
+      }
+      routeDistance += length;
     }
-    route.needsUpdate = true;
-    this.route.geometry.setDrawRange(0, routeCount * 2);
+    this.route.geometry.dispose();
+    this.route.geometry = new THREE.BufferGeometry()
+      .setAttribute("position", new THREE.Float32BufferAttribute(vertices, 3))
+      .setAttribute("color", new THREE.Float32BufferAttribute(routeColors, 4));
+    this.route.geometry.setDrawRange(0, vertices.length / 3);
     const positions = this.points.geometry.getAttribute("position"), colors = this.points.geometry.getAttribute("color");
     this.points.material.size = 0.003 * THREE.MathUtils.clamp(Math.sqrt(radius / 0.14), 0.85, 1.25);
     let count = 0;
@@ -583,13 +622,8 @@ export class WebXRNavigationMap {
     this.hold(ray, time);
     const current = this.pick(ray);
     if (!current) return;
-    if (!gesture.moved && gesture.region === "compass") {
-      this.compassEnabled = !this.compassEnabled;
-    } else if (!gesture.moved && (gesture.region === "recenter" || gesture.region === "pin")) {
-      if (gesture.region === "pin") this.viewport.toggleFollow(this.snapshot?.robot);
-      else this.viewport.follow(this.snapshot?.robot);
-      this.requestViewport(time);
-    } else if (gesture.motion && this.clickToWalk && Math.abs(gesture.rotation - this.mapData.rotation.z) < 0.001) {
+    if (!gesture.moved && this.activateControl(gesture.target, time)) return;
+    if (gesture.motion && this.clickToWalk && Math.abs(gesture.rotation - this.mapData.rotation.z) < 0.001) {
       const drop = gesture.region === "sphere" && gesture.moved;
       const tap = gesture.region === "face" && !gesture.moved && time - gesture.at <= TAP_TIME_MS;
       const point = drop ? this.dropPoint(current, gesture) : current;

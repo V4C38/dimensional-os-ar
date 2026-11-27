@@ -1,11 +1,12 @@
 import { clientTrackingToMapPoint } from "DimOSARClient.lspkg/Scripts/DimOSARClient/localization/ClientTracking";
 import { expect, it, vi } from "vitest";
+import { setMockTime } from "../setup/lens-globals";
 import { PointCloudRenderer, composeLidarPoint } from "../../Assets/Scripts/DimOSSpecsClient/sensors/PointCloudRenderer";
 
 function harness() {
   const vertices: number[][] = [];
   const builder = { getVerticesCount: () => 0, getIndicesCount: () => 0,
-    appendVerticesInterleaved: (data: number[]) => vertices.push(data), appendIndices: vi.fn(),
+    appendVerticesInterleaved: (data: number[]) => vertices.push(data.slice()), appendIndices: vi.fn(),
     isValid: () => true, updateMesh: vi.fn(), getMesh: () => ({}) };
   const transform = { setWorldPosition: vi.fn(), setWorldRotation: vi.fn(), setWorldScale: vi.fn() };
   const renderer = Object.assign(new PointCloudRenderer(), { visual: { enabled: false, mainMaterial: { mainPass: {} } },
@@ -30,6 +31,35 @@ it("does not rebuild a stable cloud and measures clearance in metres", () => {
   h.renderer.apply(input); h.renderer.apply(input);
   expect(h.builder.updateMesh).toHaveBeenCalledOnce();
   expect(h.vertices[0][6]).toBeCloseTo(.5);
+});
+
+it("keeps the latest cloud for the next redraw and does not upload on pose alone", () => {
+  const h = harness();
+  const first = [[1, 0, 0]] as const;
+  const newest = [[3, 0, 0]] as const;
+  setMockTime(0);
+  h.renderer.apply({ points: first, origin, robot: [0, 0, 0] });
+  setMockTime(0.5);
+  h.renderer.apply({ points: [[2, 0, 0]], origin });
+  h.renderer.apply({ points: newest, origin });
+  expect(h.builder.updateMesh).toHaveBeenCalledOnce();
+  setMockTime(1);
+  h.renderer.apply({ points: newest, origin });
+  expect(h.builder.updateMesh).toHaveBeenCalledTimes(2);
+  expect(h.vertices.at(-1)?.slice(0, 3)).toEqual(composeLidarPoint(newest[0], origin));
+  setMockTime(2);
+  h.renderer.apply({ points: newest, origin, robot: [0, 0, 10] });
+  expect(h.builder.updateMesh).toHaveBeenCalledTimes(2);
+  h.renderer.apply({ points: newest, origin, mode: "obstacles", robot: [3, 0, 0] });
+  expect(h.builder.updateMesh).toHaveBeenCalledTimes(3);
+  setMockTime(0);
+});
+
+it("caps the native cloud at 1000 points even with a larger authored limit", () => {
+  const h = harness();
+  const points = Array.from({ length: 1600 }, (_, i) => [i / 1000, 0, 0] as const);
+  h.renderer.apply({ points, origin, pointLimit: 1600 });
+  expect(h.vertices[0]).toHaveLength(1000 * 4 * 9);
 });
 
 it("keeps full-cloud geometry and colors stable when only robot XY or heading changes", () => {

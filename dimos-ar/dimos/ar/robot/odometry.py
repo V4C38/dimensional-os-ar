@@ -214,7 +214,7 @@ def _sample_from_pose(msg: PoseStamped, *, ts_server: float) -> PoseSample:
         orientation=orientation,
         ts_odom=float(msg.ts),
         ts_server=ts_server,
-        frame_id="odom",  # DimOS Go2 stamps "world"; we only ingest odom here
+        frame_id="odom",  # dimOS Go2 stamps "world"; we only ingest odom here
     )
 
 

@@ -13,11 +13,11 @@ Read [CONTRIBUTING.md](CONTRIBUTING.md) for architecture and scene wiring.
 
 ## Build, Test, and Development Commands
 
-- `./launcher/scripts/run-ci.sh`: run the complete validation gate with Python 3.12 and Node 22, including Python lint/type/unit checks, launcher tests, Core and both client Vitest suites, WebXR build, and browser integration. Use a normal terminal outside the agent sandbox: DimOS logging writes under `~/.local/state/dimos/logs/`.
+- `./launcher/scripts/run-ci.sh`: run the complete validation gate with Python 3.12 and Node 22, including Python lint/type/unit checks, launcher tests, Core and both client Vitest suites, WebXR build, and browser integration. Use a normal terminal outside the agent sandbox: dimOS logging writes under `~/.local/state/dimos/logs/`.
 - In `clients/webxr/`, run `npm ci`, then `npm run dev` for HTTPS development or `npm run build` for type checking and production output. Run ARModule on the same machine for the `/ar` proxy.
 - In `clients/core/`, run `npm ci`, `npm run typecheck`, and `npm test` for portable source validation.
 - In `clients/specs/Tests/`, run `npm ci` and `npm test` for archive parity and host tests.
-- In `dimos-ar/`, use the installed DimOS environment: `/path/to/dimos/.venv/bin/python3 -m pytest`.
+- In `dimos-ar/`, use the installed dimOS environment: `/path/to/dimos/.venv/bin/python3 -m pytest`.
 - `./launcher/scripts/start-launcher.sh`: start the local launcher.
 
 ## Coding Style & Naming Conventions
@@ -42,9 +42,9 @@ After pushing, inspect the GitHub Actions run for the exact pushed commit and wa
 
 ## Architecture & Protocol Rules
 
-Import installed DimOS; do not edit upstream source. Reuse ClientCore without copying it or adding platform APIs. Change `dimos-ar/PROTOCOL.md`, Python `websocket/protocol.py`, and Core `clients/core/src/websocket/protocol.ts` together. Manipulate Lens `.scene` files through Lens Studio MCP tools rather than hand editing.
+Import installed dimOS; do not edit upstream source. Reuse ClientCore without copying it or adding platform APIs. Change `dimos-ar/PROTOCOL.md`, Python `websocket/protocol.py`, and Core `clients/core/src/websocket/protocol.ts` together. Manipulate Lens `.scene` files through Lens Studio MCP tools rather than hand editing.
 
-Stay within the requested behavior. Reuse supported DimOS interfaces and existing flows, with one owner per concern. Add safeguards, blocking states, restart requirements, or fallbacks only when explicitly requested or required by a concrete dependency. Never fabricate data or silently switch modes. AR localization is advisory and must never gate native navigation. Ship backend and clients as one version. Do not add backward compatibility, legacy protocol branches, or mixed-version support.
+Stay within the requested behavior. Reuse supported dimOS interfaces and existing flows, with one owner per concern. Add safeguards, blocking states, restart requirements, or fallbacks only when explicitly requested or required by a concrete dependency. Never fabricate data or silently switch modes. AR localization is advisory and must never gate native navigation. Ship backend and clients as one version. Do not add backward compatibility, legacy protocol branches, or mixed-version support.
 
 ## Lens Studio and Core changes
 

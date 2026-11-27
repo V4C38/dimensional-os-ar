@@ -32,7 +32,7 @@ python_pip_install() {
   fi
 }
 
-# Prints missing | stale | installed. Exit 0 only when DimOS can discover
+# Prints missing | stale | installed. Exit 0 only when dimOS can discover
 # dimos-ar blueprints via the dimos.blueprints entry points (import alone
 # is not enough — a stale editable install can import dimos.ar with empty
 # metadata).
@@ -109,7 +109,7 @@ find_dimos_python() {
     "${root}/dimos-ar/.venv/bin/python3"
   )
 
-  # Also search ordinary project folders below the user's home directory. DimOS
+  # Also search ordinary project folders below the user's home directory. dimOS
   # installs are often kept beside this repository, under a user-chosen parent.
   if [[ -n "${HOME:-}" ]]; then
     candidates+=("${HOME}"/*/.venv/bin/python3 "${HOME}"/*/.venv/bin/python)
@@ -149,8 +149,8 @@ Tried:
 
 Fix one of these, then retry:
   - Set DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3
-  - Run ./launcher/scripts/setup.sh and point it at your DimOS install
-  - Install dimos-ar into your DimOS venv manually:
+  - Run ./launcher/scripts/setup.sh and point it at your dimOS install
+  - Install dimos-ar into your dimOS venv manually:
       cd "${root}/dimos-ar" && /path/to/dimos/.venv/bin/python3 -m pip install -e ".[dev]"
 EOF
 }

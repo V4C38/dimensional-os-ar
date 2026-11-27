@@ -13,7 +13,7 @@ from armodule import Phase, ProcessManager
 from tests.processes import Child, error_status, parsed
 
 READY = "ARModule started websocket=ws://0.0.0.0:8787"
-BANNER = "WebSocket: ws://0.0.0.0:8787 (not listening yet — booting DimOS stack…)"
+BANNER = "WebSocket: ws://0.0.0.0:8787 (not listening yet — booting dimOS stack…)"
 
 
 
@@ -499,7 +499,7 @@ async def test_manual_webxr_start_and_dimos_setup_are_mutually_exclusive(runtime
     mgr, _children, _spawn = runtime
     mgr.dependencies.operation.start(asyncio.Event().wait())
     try:
-        with pytest.raises(RuntimeError, match="Wait for DimOS setup"):
+        with pytest.raises(RuntimeError, match="Wait for dimOS setup"):
             await mgr.start_webxr()
     finally:
         await mgr.dependencies.operation.cancel()

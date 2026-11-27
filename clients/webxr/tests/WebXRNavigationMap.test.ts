@@ -30,6 +30,19 @@ function fixture(motion = true) {
 }
 
 describe("navigation map geometry", () => {
+  it("draws a thin route with transparent ends and an opaque middle even for one segment", () => {
+    const { map } = fixture();
+    const route = (map as any).route as THREE.Mesh<THREE.BufferGeometry, THREE.MeshBasicMaterial>;
+    const positions = route.geometry.getAttribute("position"), colors = route.geometry.getAttribute("color");
+    expect(route.material.transparent).toBe(true);
+    expect(route.material.depthWrite).toBe(false);
+    expect(colors.getW(0)).toBe(0);
+    expect(colors.getW(colors.count - 1)).toBeCloseTo(0);
+    expect(Math.max(...Array.from({ length: colors.count }, (_, i) => colors.getW(i)))).toBe(1);
+    expect(Math.hypot(positions.getX(0) - positions.getX(1), positions.getY(0) - positions.getY(1))).toBeCloseTo(0.0015);
+    map.dispose();
+  });
+
   it("aligns native map axes using the matching localization and falls back to the initial headset heading", () => {
     const { map } = fixture();
     const data = (map as any).mapData as THREE.Group;

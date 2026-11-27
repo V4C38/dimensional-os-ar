@@ -39,7 +39,7 @@ class _BroadcastSink(Protocol):
 
 
 class RobotStatePublisher:
-    """DimOS stream handlers → client-ready pose and LiDAR for all clients."""
+    """dimOS stream handlers → client-ready pose and LiDAR for all clients."""
 
     def __init__(
         self,

@@ -1,6 +1,6 @@
 """Repo-owned native planner adapter with source-correlated terminal facts.
 
-The native Bool topic remains available to other DimOS modules. ARModule uses
+The native Bool topic remains available to other dimOS modules. ARModule uses
 this adapter's additional status topic so delayed transport facts retain the
 identity of the goal that produced them.
 """

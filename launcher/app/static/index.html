@@ -51,6 +51,7 @@
                     </span>
                   </summary>
                   <div class="config-body settings-body">
+                    <p class="settings-hint hidden" id="dimosMinVersion"></p>
                     <div class="settings-row">
                       <span class="settings-row-label" id="installSourceLabel">Installation source</span>
                       <fieldset class="install-source radio-group" aria-labelledby="installSourceLabel">
@@ -83,9 +84,9 @@
                     </div>
                     <div class="settings-row settings-feedback">
                       <div class="settings-row-main">
-                        <p class="settings-hint hidden" id="installHint" role="status">A DimOS environment is required to continue.</p>
+                        <p class="settings-hint hidden" id="installHint" role="status">A dimOS environment is required to continue.</p>
                         <div class="settings-actions">
-                          <p class="settings-hint hidden" id="dimosVersionHint"></p>
+                          <p class="settings-hint hidden" id="dimosVersionHint" role="status"><span id="dimosInstallState"></span><span id="dimosInstallVersion"></span></p>
                           <button type="button" class="btn primary hidden" id="installBtn">Install</button>
                         </div>
                       </div>
@@ -100,7 +101,7 @@
             </div>
             <div class="selector-group" role="group" aria-label="Robot">
               <label class="selector-label" for="robotSource">Robot source</label>
-              <select class="primary-config-control" id="robotSource"><option value="auto">Auto (scan on start)</option><option value="simulated">Simulated hardware</option></select>
+              <select class="primary-config-control" id="robotSource"><option value="auto">Auto (scan on start)</option><option value="simulated">Simulated Hardware</option></select>
               <div class="selector-children secondary-control" id="robotSourceDetails">
                 <div class="robot-setup-row" id="robotSetupRow">
                   <div class="robot-setup-field hidden" id="canCard">
@@ -117,7 +118,7 @@
                   <input type="text" id="robotIp" aria-label="Robot IP address" inputmode="decimal" autocomplete="off" placeholder="192.168.1.10" />
                 </div>
                 <div id="replayRow" class="hidden">
-                  <div class="connection-selector"><select id="playbackSource" aria-label="Recording"><option value="">Go2 example</option></select><button type="button" class="btn ghost btn-icon" id="editReplay" aria-label="Add recording">✎</button></div>
+                  <div class="connection-selector"><select id="playbackSource" aria-label="Recording"><option value="">Recording: Unitree Go2 AR example</option></select><button type="button" class="btn ghost btn-icon" id="editReplay" aria-label="Add recording">✎</button></div>
                   <div id="replayTimeline" class="replay-timeline" hidden>
                     <div class="replay-timeline-controls">
                       <button type="button" class="btn ghost replay-icon" id="replayPlay" aria-label="Play" title="Play">▶</button>
@@ -159,6 +160,32 @@
                     </summary>
                     <div class="config-body settings-body">
                       <div class="provider-list">
+                        <details class="localization-option">
+                          <summary>Relocalization policy</summary>
+                          <div class="provider-fields settings-fields">
+                            <p class="settings-hint policy-intro">Set how far the robot can move or turn before automatic relocalization is requested.</p>
+                            <div class="field">
+                              <div class="policy-field-label">
+                                <label for="travel_threshold_m">Minimum distance (m)</label>
+                                <details class="policy-help">
+                                  <summary aria-label="About minimum distance"><span class="blueprint-info-icon" aria-hidden="true">i</span></summary>
+                                  <p class="settings-hint">How far the robot can travel before it becomes eligible for an automatic localization correction.</p>
+                                </details>
+                              </div>
+                              <input id="travel_threshold_m" type="number" required min="0.001" step="any" data-localization-policy />
+                            </div>
+                            <div class="field">
+                              <div class="policy-field-label">
+                                <label for="heading_threshold_deg">Minimum rotation (°)</label>
+                                <details class="policy-help">
+                                  <summary aria-label="About minimum rotation"><span class="blueprint-info-icon" aria-hidden="true">i</span></summary>
+                                  <p class="settings-hint">How much the robot can turn from its last localization heading before it becomes eligible for an automatic correction.</p>
+                                </details>
+                              </div>
+                              <input id="heading_threshold_deg" type="number" required min="0.001" max="180" step="any" data-localization-policy />
+                            </div>
+                          </div>
+                        </details>
                         <div class="provider">
                           <label class="provider-toggle">
                             <input type="checkbox" role="switch" id="fiducialEnabled" aria-controls="fiducialPanel" />
@@ -166,6 +193,7 @@
                             <span class="switch-track" aria-hidden="true"></span>
                           </label>
                           <div class="provider-fields hidden" id="fiducialPanel">
+                            <p class="settings-hint">Align the headset by looking at a printed marker mounted on the robot.</p>
                             <div id="tagList" class="tag-list"></div>
                             <p id="markersEmpty" class="settings-hint hidden">No fiducial markers configured.</p>
                             <div class="tag-actions">
@@ -181,6 +209,7 @@
                             <span class="switch-track" aria-hidden="true"></span>
                           </label>
                           <div class="provider-fields hidden" id="vpsPanel">
+                            <p class="settings-hint">VPS (Visual Positioning System) aligns the headset to a previously scanned space through an external provider’s API.</p>
                             <label class="field">
                               <span>Vendor</span>
                               <select id="vpsVendor">
@@ -206,27 +235,20 @@
                             </div>
                           </div>
                         </div>
-                        <details class="localization-option">
-                          <summary>
-                            <span>Relocalization policy <span class="settings-hint">(optional)</span></span>
-                          </summary>
-                          <div class="provider-fields">
-                            <div class="field" id="nativeMapField">
-                              <label for="nativeMapFile">Prescanned LiDAR map</label>
-                              <input type="text" id="nativeMapFile" placeholder="Map name or .map.db path" autocomplete="off" />
-                            </div>
-                            <div class="settings-fields">
-                              <label class="field">
-                                <span>Minimum distance (m)</span>
-                                <input id="travel_threshold_m" type="number" required min="0.001" step="any" data-localization-policy />
-                              </label>
-                              <label class="field">
-                                <span>Minimum rotation (°)</span>
-                                <input id="heading_threshold_deg" type="number" required min="0.001" max="180" step="any" data-localization-policy />
-                              </label>
+                        <div class="provider" id="nativeMapField">
+                          <label class="provider-toggle">
+                            <input type="checkbox" role="switch" id="nativeMapEnabled" aria-controls="nativeMapPanel" />
+                            <span>dimOS saved map</span>
+                            <span class="switch-track" aria-hidden="true"></span>
+                          </label>
+                          <div class="provider-fields hidden" id="nativeMapPanel">
+                            <p class="settings-hint">Load a saved LiDAR map for the robot while a fiducial marker or VPS aligns the headset.</p>
+                            <div class="path-picker">
+                              <input type="text" id="nativeMapFile" aria-label="dimOS saved map path" placeholder="Map name or .map.db path" autocomplete="off" />
+                              <button type="button" class="btn" id="browseNativeMap">Browse…</button>
                             </div>
                           </div>
-                        </details>
+                        </div>
                       </div>
                     </div>
                   </details>

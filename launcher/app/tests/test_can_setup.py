@@ -114,7 +114,7 @@ async def test_setup_rejects_running_dimos_without_stopping_it(tmp_path, monkeyp
     monkeypatch.setattr(manager, "_running_dimos_pids", AsyncMock(return_value=[123]))
     stop = AsyncMock()
     monkeypatch.setattr(manager, "stop_armodule", stop)
-    with pytest.raises(RuntimeError, match="while DimOS is running"):
+    with pytest.raises(RuntimeError, match="while dimOS is running"):
         await manager.setup_can()
     stop.assert_not_awaited()
 
@@ -225,7 +225,7 @@ async def test_can_api_exposes_status_and_running_conflict(app_context, monkeypa
     monkeypatch.setattr(
         app_context.manager,
         "setup_can",
-        AsyncMock(side_effect=RuntimeError("DimOS is running")),
+        AsyncMock(side_effect=RuntimeError("dimOS is running")),
     )
     with pytest.raises(HTTPException) as exc:
         await app.api_can_setup(context=app_context)

@@ -1,4 +1,4 @@
-"""Repository boundaries remain enforceable without importing the application or DimOS."""
+"""Repository boundaries remain enforceable without importing the application or dimOS."""
 from __future__ import annotations
 
 import importlib.util

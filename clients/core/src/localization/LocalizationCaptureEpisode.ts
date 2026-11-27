@@ -1,5 +1,5 @@
 import { LocalizationTrackingReporter } from "./LocalizationTrackingReporter";
-import { AR_MODULE_CLIENT_CONFIG, type CameraCaptureSource, type CameraTrackingSource, type CaptureGeometry, type ClientClock, type CapturePolicy, type LocalizationObservation, type LocalizationObservationsRequest, type Outbound } from "../ClientContracts";
+import { AR_MODULE_CLIENT_CONFIG, type CameraCaptureSource, type CameraTrackingSource, type CaptureGeometry, type ClientClock, type LocalizationObservation, type LocalizationObservationsRequest, type Outbound } from "../ClientContracts";
 import {
   encodeLocalizationStartRequest,
 } from "../websocket/protocol";
@@ -28,7 +28,7 @@ export interface LocalizationCaptureState {
   lastError: string | null;
   /** Null means no automatic retry is scheduled. */
   retryInS?: number | null;
-  capturePolicy?: CapturePolicy | null;
+  purpose?: LocalizationObservationsRequest["purpose"];
   capturedCount?: number;
   observationCount?: number;
 }
@@ -183,7 +183,7 @@ export class LocalizationCaptureEpisode {
     const episode = this.episode;
     return {
       phase: episode.phase,
-      capturePolicy: this.request?.capture_policy ?? null,
+      purpose: this.request?.purpose,
       lastError: episode.phase === "failed" ? episode.failure.message : null,
       retryInS: episode.phase === "failed" && episode.retryAt !== null
         ? Math.max(0, episode.retryAt - this.clock.now()) : null,

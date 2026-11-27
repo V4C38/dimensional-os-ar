@@ -1,4 +1,4 @@
-"""Go2 AprilTag UI fields converted to DimOS FiducialMarkerMount JSON."""
+"""Go2 AprilTag UI fields converted to dimOS FiducialMarkerMount JSON."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-# Read the shipped resource directly: the launcher must work before DimOS is installed.
+# Read the shipped resource directly: the launcher must work before dimOS is installed.
 LOCALIZATION_DEFAULTS_PATH = (
     Path(__file__).resolve().parents[2] / "dimos-ar/dimos/ar/localization/defaults.json"
 )

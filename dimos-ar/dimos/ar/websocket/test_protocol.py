@@ -80,7 +80,7 @@ def _sample_hello(client_id: str = "abc123") -> Hello:
             CapabilityName.LOCALIZATION: _available(),
             CapabilityName.ESTOP: _available(),
             CapabilityName.AGENT: Capability(
-                available=False, reason="current blueprint has no DimOS agent"
+                available=False, reason="current blueprint has no dimOS agent"
             ),
         },
         navigation_inputs=_sample_navigation_inputs(),

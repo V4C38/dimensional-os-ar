@@ -1,4 +1,4 @@
-"""Read the effective transport using the selected DimOS interpreter."""
+"""Read the effective transport using the selected dimOS interpreter."""
 
 from __future__ import annotations
 

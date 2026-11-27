@@ -16,7 +16,7 @@ from dimos.ar.localization.types import LocalizedPose, TagResult, TagSighting
 from dimos.ar.localization.vps.admission import VpsAdmission
 from dimos.ar.robot.odometry import PoseBuffer
 from dimos.ar.spatial import frozen_matrix
-from dimos.ar.websocket.protocol import LocalizationTracking, TimeSync
+from dimos.ar.websocket.protocol import LocalizationCaptureProgress, LocalizationTracking, TimeSync
 from dimos.msgs.geometry_msgs.PoseStamped import PoseStamped
 from dimos.utils.transform_utils import matrix_to_pose
 from test_support.localization import _observation
@@ -91,6 +91,7 @@ def results(f):
 
 async def tag(f):
     episode = f.service._request("client", f.client, "robot")
+    episode.capture_ts = 100.0
     await f.service._tag("client", f.client, episode, (_observation(100.0),))
     return episode
 
@@ -121,6 +122,24 @@ async def test_tag_immediately_returns_one_shared_result_and_keeps_provenance(se
     assert f.client.alignment.source == "tag"
     assert not f.service._headset_due(f.client)
     assert not f.vps.localize.called
+
+
+async def test_tag_result_echoes_batch_timestamp_when_newest_frame_misses(setup):
+    f = setup
+    localize = f.local.localize_tag
+    f.local.localize_tag = lambda observations: localize(observations[:-1])
+    episode = f.service._request("client", f.client, "robot")
+    f.service.progress(
+        LocalizationCaptureProgress(episode.id, "submitted", 0.0, capture_ts=50.1),
+        "client",
+        TimeSync(ts_client=50.0, ts_server=100.0),
+    )
+    f.service.observations(tuple(_observation(ts) for ts in (99.9, 100.0, 100.1)), "client")
+    await asyncio.gather(*f.service._tag_jobs)
+    result, = results(f)
+    assert result["ts"] == pytest.approx(100.1)
+    acknowledge(f)
+    assert f.client.alignment.ts == 100.0
 
 
 async def test_native_insertion_preserves_pose_then_updates_only_lower_edge(setup):
@@ -214,6 +233,7 @@ async def test_first_headset_vps_requires_independent_alignment_then_can_adopt(s
     await tag(f)
     acknowledge(f)
     episode = f.service._request("client", f.client, "headset")
+    episode.capture_ts = 100.0
     await f.service._headset("client", f.client, episode, _observation(100.0))
     assert results(f)[-1]["position"] == [10.0, 20.0, 0.0]
     assert f.service.frames.shared_frame_id == "vps:office"
@@ -377,6 +397,7 @@ async def test_capture_travel_not_completion_travel_controls_refresh(setup):
     f = setup
     episode = f.service._request("client", f.client, "robot")
     episode.travel_m = 3
+    episode.capture_ts = 100.0
     await f.service._tag("client", f.client, episode, (_observation(100),))
     f.client.travel_m = 13
     result = results(f)[-1]

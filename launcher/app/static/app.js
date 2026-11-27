@@ -64,7 +64,10 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
   const vpsPanel = $("vpsPanel");
   const vpsVendor = $("vpsVendor");
   const mapCode = $("mapCode");
+  const nativeMapEnabled = $("nativeMapEnabled");
+  const nativeMapPanel = $("nativeMapPanel");
   const nativeMapFile = $("nativeMapFile");
+  const browseNativeMap = $("browseNativeMap");
   const multisetClientId = $("multisetClientId");
   const multisetClientSecret = $("multisetClientSecret");
   const revealMultiset = $("revealMultiset");
@@ -107,6 +110,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
 
   const savedBlueprint = localStorage.getItem("dimos.blueprint");
   let metadataReady = false;
+  let dimosMinVersion = "";
   const editor = new ProfileSettingsEditor(settingsWriter({
     request: body => fetch("/api/settings", {
       method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
@@ -135,7 +139,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     blueprintHelpBtn.setAttribute("aria-expanded", "false");
     const manipulation = spec.manipulation;
     $("nativeMapField").classList.toggle("hidden", manipulation);
-    nativeMapFile.disabled = configIsLocked() || manipulation;
+    nativeMapEnabled.disabled = nativeMapFile.disabled = browseNativeMap.disabled = configIsLocked() || manipulation;
 
 
     const rememberedSource = preferences.values[`${configuration.replayRobot}_source`] || "auto";
@@ -150,6 +154,10 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     syncConfigCards();
     syncHardwareSetup();
     if (manipulation) void refreshPlanner();
+  }
+
+  function recordingExampleLabel() {
+    return configuration.replayRobot === "go2" ? "Recording: Unitree Go2 AR example" : "Recording: OpenYAM AR example";
   }
 
   function renderSourceOptions(selected = $("robotSource").value, missing = "saved") {
@@ -310,7 +318,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
       vps: vpsEnabled.checked,
       vps_vendor: vpsVendor.value || "multiset",
       map_code: mapCode.value.trim() || null,
-      native_map_file: manipulationSelected() ? null : nativeMapFile.value.trim() || null,
+      native_map_file: nativeMapEnabled.checked && !manipulationSelected() ? nativeMapFile.value.trim() || null : null,
       mounts: editor.mounts,
       dimos_log_level: logLevel.value || configuration.defaultLogLevel,
     };
@@ -338,13 +346,17 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
       }));
       metadataReady = true;
     }
+    dimosMinVersion = data.defaults.dimos_min_version || "";
     Object.assign(policyDefaults, data.defaults.localization);
     markerEditor.configure(data.defaults);
     markerEditor.load(data.mounts);
     fiducialEnabled.checked = Boolean(data.fiducial_marker);
     vpsEnabled.checked = Boolean(data.vps);
     vpsVendor.value = data.vps_vendor || "multiset";
-    if (document.activeElement !== nativeMapFile) nativeMapFile.value = data.native_map_file || "";
+    if (document.activeElement !== nativeMapFile) {
+      nativeMapFile.value = data.native_map_file || "";
+      nativeMapEnabled.checked = Boolean(data.native_map_file);
+    }
     if (document.activeElement !== mapCode) {
       mapCode.value = data.map_code || "";
     }
@@ -392,7 +404,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     vpsEnabled.disabled = locked;
     vpsVendor.disabled = locked;
     mapCode.disabled = locked;
-    nativeMapFile.disabled = locked || manipulationSelected();
+    nativeMapEnabled.disabled = nativeMapFile.disabled = browseNativeMap.disabled = locked || manipulationSelected();
     multisetClientId.disabled = locked;
     multisetClientSecret.disabled = locked;
     revealMultiset.disabled = locked;
@@ -405,6 +417,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
   function syncLocalizationPanels() {
     fiducialPanel.classList.toggle("hidden", !fiducialEnabled.checked);
     vpsPanel.classList.toggle("hidden", !vpsEnabled.checked);
+    nativeMapPanel.classList.toggle("hidden", !nativeMapEnabled.checked);
   }
 
   function describeState(status, view) {
@@ -415,11 +428,11 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
       case "installing":
         return { label: "Installing", detail: "", phase: "installing" };
       case "starting":
-        return { label: "Starting", detail: `Starting DimOS with ${configuration.blueprint}…`, phase: "starting" };
+        return { label: "Starting", detail: `Starting dimOS with ${configuration.blueprint}…`, phase: "starting" };
       case "running":
         return { label: "Running", detail: "", phase: "running" };
       case "stopping":
-        return { label: "Stopping", detail: "Stopping the DimOS session…", phase: "stopping" };
+        return { label: "Stopping", detail: "Stopping the dimOS session…", phase: "stopping" };
       case "error":
         return {
           label: "Error",
@@ -455,9 +468,9 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     installing: "Installing dependencies",
     can_setup: "Setting up CAN",
     preparing: "Preparing launch",
-    starting: "Starting DimOS",
+    starting: "Starting dimOS",
     running: "Blueprint running",
-    stopping: "Stopping DimOS",
+    stopping: "Stopping dimOS",
   };
   let actionPhase = "";
   let actionTimer;
@@ -561,24 +574,30 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     const installedPath = service.status.dimos_install_dir || service.status.dimos_python || "";
     const pathChanged = installPathEdited && dimosPython.value.trim() !== installedPath;
     const showInstall = needsInstall || cloning || pathChanged;
+    const candidate = cloning || pathChanged;
+    const currentState = service.status.dimos_install_state ?? (
+      service.status.check_ok == null ? null : installedPath ? "found" : "missing"
+    );
+    const selectedState = selectedCheck?.state;
+    const state = (candidate || !installedPath) && selectedState
+      ? ({ download: "missing", invalid: "missing" }[selectedState] || selectedState)
+      : currentState;
     if (selectedCheck && showInstall && !installDisabled) {
-      depsSummary.textContent = {
-        checking: "Checking folder…",
-        invalid: "Folder needs attention",
-        download: "Installation needed",
-        found: "DimOS found",
-        unknown: "Folder unchecked",
-      }[selectedCheck.state] || "";
-      depsSummary.dataset.phase = selectedCheck.state === "found" ? "ready" : "needs_setup";
+      const problem = { invalid: "Folder needs attention", download: "Installation needed" }[selectedCheck.state];
+      if (problem) {
+        depsSummary.textContent = problem;
+        depsSummary.dataset.phase = "needs_setup";
+      }
     }
     dimosPython.disabled = browseDimosInstall.disabled = cloneDir.disabled = dimosRef.disabled = installDisabled;
     installBanner.querySelectorAll('input[name="setupMode"]').forEach(input => { input.disabled = installDisabled; });
 
-    installHint.textContent = installError || (showInstall && !installDisabled && selectedCheck?.message) || (needsInstall
+    const hasInstallStatus = ["found", "missing", "incompatible"].includes(selectedState);
+    installHint.textContent = installError || (showInstall && !installDisabled && !hasInstallStatus && selectedCheck?.message) || (hasInstallStatus ? "" : needsInstall
       ? service.status.check_ok === true
         ? "Install the manipulation planner dependencies to use this blueprint."
-        : "A DimOS environment is required to continue."
-      : cloning ? "Download DimOS into the folder below." : "");
+        : "A dimOS environment is required to continue."
+      : cloning ? "Download dimOS into the folder below." : "");
     installHint.classList.toggle("hidden", !installHint.textContent);
     dimosRefField.classList.toggle("hidden", !cloning);
     installBtn.textContent = cloning ? "Download & install" : needsInstall ? "Install" : "Use folder";
@@ -591,11 +610,19 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     }
     installBanner.classList.toggle("needs-setup", needsAttention);
 
-    const versionBits = [];
-    if (service.status.dimos_version) versionBits.push(`DimOS ${service.status.dimos_version}`);
-    if (service.status.dimos_ref) versionBits.push(service.status.dimos_ref);
-    dimosVersionHint.textContent = versionBits.join(" · ");
-    dimosVersionHint.classList.toggle("hidden", versionBits.length === 0);
+    const label = { found: "dimOS found", missing: "dimOS missing", incompatible: "dimOS incompatible" }[state];
+    const showCandidate = (candidate || !installedPath) && !!selectedState;
+    const version = showCandidate ? selectedCheck.dimos_version : service.status.dimos_version;
+    const ref = showCandidate ? selectedCheck.dimos_ref : service.status.dimos_ref;
+    const versionBits = [version && `dimOS ${version}`, ref].filter(Boolean);
+    const installState = $("dimosInstallState");
+    installState.textContent = label || "";
+    installState.dataset.phase = { found: "ready", missing: "error", incompatible: "needs_setup" }[state] || "";
+    $("dimosInstallVersion").textContent = `${label && versionBits.length ? " · " : ""}${versionBits.join(" · ")}`;
+    dimosVersionHint.classList.toggle("hidden", !dimosVersionHint.textContent);
+    const minimum = $("dimosMinVersion");
+    minimum.textContent = dimosMinVersion ? `Minimum dimOS version: ${dimosMinVersion}` : "";
+    minimum.classList.toggle("hidden", !dimosMinVersion);
   }
 
   let connectionTimer;
@@ -804,6 +831,11 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     syncConfigCards();
     schedulePersist();
   });
+  nativeMapEnabled.addEventListener("change", () => {
+    if (!nativeMapEnabled.checked) editor.requests.cancel("nativeMapPicker");
+    syncLocalizationPanels();
+    schedulePersist();
+  });
   [vpsVendor, mapCode, nativeMapFile, multisetClientId, multisetClientSecret, logLevel].forEach((el) => {
     el.addEventListener("change", schedulePersist);
     el.addEventListener("blur", schedulePersist);
@@ -865,29 +897,38 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
   });
   dimosRef.addEventListener("change", checkSetupLocation);
 
-  browseDimosInstall.addEventListener("click", async () => {
-    if (editor.requests.busy("pythonPicker")) return;
-    const request = editor.requests.begin("pythonPicker", () => JSON.stringify([environmentScope(), dimosPython.value]));
-    try {
-      const res = await fetch("/api/browse-dimos-install", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: dimosPython.value }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!request.current()) return;
-      if (!res.ok) {
-        appendLog(`File chooser error: ${data.detail || res.statusText}`);
-      } else if (data.path) {
-        dimosPython.value = data.path;
-        dimosPython.dispatchEvent(new Event("input"));
+  function bindPathPicker(button, input, endpoint, key, scope, onSelected) {
+    button.addEventListener("click", async () => {
+      if (button.disabled || editor.requests.busy(key)) return;
+      const request = editor.requests.begin(key, () => JSON.stringify([scope(), input.value]));
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path: input.value }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!request.current() || button.disabled) return;
+        if (!res.ok) appendLog(`File chooser error: ${data.detail || res.statusText}`);
+        else if (data.path) {
+          input.value = data.path;
+          onSelected();
+        }
+      } catch (err) {
+        if (request.current()) appendLog(`File chooser error: ${err}`);
+      } finally {
+        request.finish();
       }
-    } catch (err) {
-      if (request.current()) appendLog(`File chooser error: ${err}`);
-    } finally {
-      request.finish();
-    }
-  });
+    });
+  }
+
+  bindPathPicker(browseDimosInstall, dimosPython, "/api/browse-dimos-install", "pythonPicker",
+    () => [environmentScope(), setupMode()], () => dimosPython.dispatchEvent(new Event("input")));
+  bindPathPicker(browseNativeMap, nativeMapFile, "/api/browse-native-map", "nativeMapPicker",
+    () => [environmentScope(), editor.robotProfileId], () => {
+      syncConfigCards();
+      schedulePersist();
+    });
 
   installBtn.addEventListener("click", async () => {
     if (editor.requests.busy("install")) return;
@@ -1105,6 +1146,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     vpsEnabled.checked = settings.vps;
     mapCode.value = settings.map_code || "";
     nativeMapFile.value = settings.native_map_file || "";
+    nativeMapEnabled.checked = Boolean(settings.native_map_file);
     markerEditor.load(settings.mounts);
     Object.entries(policyInputs).forEach(([key, input]) => {
       input.value = String(settings[key] ?? policyDefaults[key]);
@@ -1186,7 +1228,7 @@ import { launcherPresentation } from "./presentation.mjs?v=launcher-controls-7";
     const selected = preferences.values[replayPreferenceKey(robot)] || "";
     const paths = new Set([...(preferences.recordings[robot] || []), selected].filter(Boolean));
     const select = $("playbackSource");
-    select.replaceChildren(new Option(robot === "go2" ? "Go2 example" : "Default recording", ""), ...Array.from(paths, path => {
+    select.replaceChildren(new Option(recordingExampleLabel(), ""), ...Array.from(paths, path => {
       const option = new Option(path.split(/[\\/]/).at(-1) || path, path);
       option.title = path;
       return option;

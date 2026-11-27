@@ -1407,7 +1407,7 @@ class ARModule(Module):  # type: ignore[misc]
     def ar_place_marker(self, id: str, x: float, y: float, z: float, title: str = "") -> str:
         """Place or replace a marker in the AR client's world at an odom-frame point.
 
-        Input uses native DimOS odometry, matching mapping and agent perception.
+        Input uses native dimOS odometry, matching mapping and agent perception.
         ARModule projects the native point into the shared map at the wire boundary.
         `id` is the handle, not the label. An omitted or empty title leaves the
         marker unlabeled. The same id upserts.
@@ -1432,7 +1432,7 @@ class ARModule(Module):  # type: ignore[misc]
 
     @skill
     def ar_get_client_pose(self) -> str:
-        """Return the latest wearer pose in native DimOS odom, including look direction.
+        """Return the latest wearer pose in native dimOS odom, including look direction.
 
         Position and viewing ray are projected from the shared map into native odometry.
         Position and orientation describe the physical optical frame in native odom.

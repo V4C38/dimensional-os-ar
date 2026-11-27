@@ -1,4 +1,22 @@
 import { expect, type Page } from "@playwright/test";
+
+/** One sampled press frame; keep quick taps within the production tap deadline. */
+export async function tapSelection(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const w = window as any;
+    const select = (value: number) => w.questDevice.primaryInputMode === "controller"
+      ? w.questDevice.controllers.right.updateButtonValue("trigger", value)
+      : w.questDevice.hands.right.updatePinchValue(value);
+    const session = w.xb.core.renderer.xr.getSession();
+    const frame = () => new Promise<void>(resolve => session.requestAnimationFrame(() => resolve()));
+    select(1);
+    await frame();
+    select(0);
+    await frame();
+    await frame();
+  });
+}
+
 export async function setSelection(page: Page, value: number): Promise<void> {
   await page.evaluate(async (amount) => {
     const w = window as any;
@@ -382,14 +400,15 @@ export async function scrollResponse(page: Page): Promise<void> {
     .toBeGreaterThan(0);
 }
 
-export async function pointIndexAtButton(page: Page, label: string, distance: number): Promise<void> {
+export async function pointIndexAtButton(page: Page, label: string, distance: number, mapControl = false): Promise<void> {
   await expect.poll(() => page.evaluate(() => {
     const app = (window as any).xb.core.scene.children.find((o: any) => o.client?.manipulation);
     return (window as any).integrationMenuQueries.settled(app.mainMenu);
   })).toBe(true);
-  await page.evaluate(async ({ label, distance }) => {
+  await page.evaluate(async ({ label, distance, mapControl }) => {
     const w = window as any, app = w.xb.core.scene.children.find((o: any) => o.client?.manipulation);
-    const button = w.integrationMenuQueries.button(app.mainMenu, label).mesh;
+    const button = mapControl ? w.xb.core.scene.getObjectByName(label) :
+      w.integrationMenuQueries.button(app.mainMenu, label).mesh;
     await new Promise<void>(resolve => app.session.requestAnimationFrame((_time: number, frame: XRFrame) => {
       const source = Array.from(app.session.inputSources as XRInputSource[]).find(s => s.hand && s.handedness === "right")!;
       const tip = frame.getJointPose!(source.hand!.get("index-finger-tip")!, app.reference)!.transform.position;
@@ -403,7 +422,7 @@ export async function pointIndexAtButton(page: Page, label: string, distance: nu
     // Approach, contact and withdrawal must each be observed by rendered XR
     // frames; a fixed delay can expire before even one frame on software GL.
     for (let i = 0; i < 3; i++) await new Promise<void>(resolve => app.session.requestAnimationFrame(() => resolve()));
-  }, { label, distance });
+  }, { label, distance, mapControl });
 
 }
 

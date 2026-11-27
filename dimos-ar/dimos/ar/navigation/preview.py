@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 
 
 class PreviewPlanner:
-    """Compute preview-only paths using the DimOS global planning primitives."""
+    """Compute preview-only paths using the dimOS global planning primitives."""
 
     def __init__(self, global_config: GlobalConfig) -> None:
         self._global_config = global_config

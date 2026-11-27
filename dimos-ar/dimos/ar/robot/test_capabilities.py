@@ -27,7 +27,7 @@ def test_capability_set_from_supported() -> None:
     mapping = capabilities.as_mapping()
     assert mapping[CapabilityName.LIDAR].reason == "lidar not available on this robot"
     assert mapping[CapabilityName.LOCALIZATION].reason is None
-    assert mapping[CapabilityName.AGENT].reason == "current blueprint has no DimOS agent"
+    assert mapping[CapabilityName.AGENT].reason == "current blueprint has no dimOS agent"
     navigation = capabilities.navigation_as_mapping()
     assert navigation[NAV_GOAL].available is False
     assert navigation[NAV_JOYSTICK].available is False

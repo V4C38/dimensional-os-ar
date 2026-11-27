@@ -104,6 +104,9 @@ export class SpecsMapGesture {
     this.gesture = { ...this.gesture, owner: remainingOwner, region: "face", start: point,
       center: this.viewport.centerM, radius: this.diameterM / 2, moved: true, motion: false };
   }
+  disallowFaceTap(owner: string): void {
+    if (this.gesture?.owner === owner) this.gesture.allowFaceTap = false;
+  }
   release(owner: string, point: XY, time: number, rotation: number): void {
     const g = this.gesture, snap = this.snapshot;
     if (!g || g.owner !== owner || this.scale) return;
@@ -165,30 +168,21 @@ export class SpecsMapPixels {
 }
 
 /** SDK-free geometry for the native view; all map-space outputs use local metres. */
-export function projectSpecsMap(snapshot: NavigationMapSnapshot, viewport: NavigationMapController, diameterM: number) {
+export function projectSpecsMap(snapshot: NavigationMapSnapshot, viewport: NavigationMapController, diameterM: number, includeRoute = true) {
   const radius = diameterM / 2, metersPerUnit = viewport.radiusM / radius;
   const local = (point: XY): XY => viewport.toLocal(point, metersPerUnit);
   const robot = local([snapshot.robot[0], snapshot.robot[1]]), distance = Math.hypot(...robot);
   const target = snapshot.target ? local(snapshot.target) : null;
   const route: [number, number, number, number][] = [];
-  for (const [x1, y1, x2, y2] of snapshot.route) {
-    const segment = clipNavigationMapSegment(local([x1, y1]), local([x2, y2]), radius);
+  if (includeRoute) for (const [x1, y1, x2, y2] of snapshot.route) {
+    const segment = clipNavigationMapSegment(local([x1, y1]), local([x2, y2]), radius - 0.0015);
     if (segment) route.push(segment);
   }
-  const heights: { position: readonly [number, number, number]; hue: number }[] = [];
-  snapshot.heights.forEach(([x, y, z], index) => {
-    const p = local([x, y]), d = Math.hypot(...p) / radius;
-    if (d > 0.86 || viewport.radiusM >= 4 && d > 0.55 && index % 3 === 2) return;
-    const t = Math.max(0, Math.min(1, (d - 0.55) / 0.45));
-    const taper = 1 - t * t * (3 - 2 * t);
-    heights.push({ position: [p[0], p[1], 0.004 + Math.max(0, z) / metersPerUnit * taper],
-      hue: 0.6 - Math.max(0, Math.min(z / 1.5, 1)) * 0.6 });
-  });
   const ideal = viewport.radiusM * 0.5, magnitude = 10 ** Math.floor(Math.log10(ideal));
   const scaleM = [1, 2, 5, 10].map(value => value * magnitude).find(value => value >= ideal) ?? magnitude;
   return { radius, metersPerUnit, robot, robotVisible: distance <= radius,
     recenter: distance > radius ? [robot[0] / distance * radius * 0.89, robot[1] / distance * radius * 0.89] as XY : null,
-    target: target && Math.hypot(...target) <= radius ? target : null, route, heights, scaleM,
+    target: target && Math.hypot(...target) <= radius ? target : null, route, scaleM,
     scaleHalfWidthM: scaleM / metersPerUnit / 2 };
 }
 
@@ -197,6 +191,8 @@ export class SpecsMapSession {
   readonly gesture: SpecsMapGesture;
   private opened = false;
   private epoch = 0;
+  private shown: NavigationMapSnapshot | null = null;
+  private nextRedraw = 0;
   private source: { reference: string; generation: number } | null = null;
   constructor(private readonly session: {
     setNavigationMapViewport(value: { center?: XY; radiusM: number } | null): void;
@@ -219,17 +215,27 @@ export class SpecsMapSession {
   private reportError(epoch: number, error: unknown): void {
     if (this.opened && epoch === this.epoch) this.feedback(error instanceof Error ? error.message : String(error), "error");
   }
-  update(open: boolean, snapshot: NavigationMapSnapshot | null, canSend: boolean, clickToWalk: boolean): void {
+  update(open: boolean, latest: NavigationMapSnapshot | null, canSend: boolean, clickToWalk: boolean,
+    now: number): NavigationMapSnapshot | null {
     if (open !== this.opened) {
       this.opened = open; this.epoch++;
       if (open) this.gesture.open(); else this.gesture.close();
     }
-    if (open) {
-      if (this.source && (!snapshot || this.source.reference !== snapshot.odom_reference_id ||
-          this.source.generation !== snapshot.source_generation)) this.epoch++;
-      this.source = snapshot ? { reference: snapshot.odom_reference_id, generation: snapshot.source_generation } : null;
-      this.gesture.update(snapshot, canSend, clickToWalk);
-    } else this.source = null;
+    const snapshot = open ? latest : null;
+    if (this.source && (!snapshot || this.source.reference !== snapshot.odom_reference_id ||
+        this.source.generation !== snapshot.source_generation)) this.epoch++;
+    const previous = this.shown;
+    if (!snapshot || !previous || previous.subscription_id !== snapshot.subscription_id ||
+        previous.source_generation !== snapshot.source_generation || previous.odom_reference_id !== snapshot.odom_reference_id ||
+        previous.shared_frame_id !== snapshot.shared_frame_id ||
+        previous.target?.[0] !== snapshot.target?.[0] || previous.target?.[1] !== snapshot.target?.[1] ||
+        (snapshot !== previous && now >= this.nextRedraw)) {
+      this.shown = snapshot;
+      this.nextRedraw = now + 0.4;
+    }
+    this.source = snapshot ? { reference: snapshot.odom_reference_id, generation: snapshot.source_generation } : null;
+    if (open) this.gesture.update(this.shown, canSend, clickToWalk);
+    return this.shown;
   }
   dispose(): void { if (this.opened) { this.opened = false; this.epoch++; this.gesture.close(); } }
 }

@@ -14,7 +14,7 @@ Install the official Python MCP SDK into your chosen tools environment and activ
 python3 clients/specs/tools/review.py --production-project
 ```
 
-Close heavy DimOS/viewer workloads before cold Lens imports on memory-constrained hosts. The editor launcher applies the verified Rosetta AOT bypass on each launch.
+Close heavy dimOS/viewer workloads before cold Lens imports on memory-constrained hosts. The editor launcher applies the verified Rosetta AOT bypass on each launch.
 
 The default `--suite all` runs the golden and regression suites plus the manipulation
 and navigation-overlap probes. Use `--suite golden` or

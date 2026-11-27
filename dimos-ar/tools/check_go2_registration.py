@@ -2,7 +2,7 @@
 
 This can reject an unsafe correction using repeated world geometry. It cannot
 qualify metric scale, camera calibration, or exposure timing without a survey.
-The input is a DimOS SQLite recording with LCM lidar and recorded robot poses.
+The input is a dimOS SQLite recording with LCM lidar and recorded robot poses.
 """
 
 from __future__ import annotations

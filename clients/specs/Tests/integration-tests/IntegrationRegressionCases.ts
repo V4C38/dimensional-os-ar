@@ -93,9 +93,9 @@ export function runRegressionCase(scenario: ReviewScenario, id: string): void {
       const observations: unknown[] = [];
       const observe = (label: string, guide: boolean): boolean => {
         const actual = { label: controller.view.description.text, guide: controller.view.guide.object.enabled,
-          policy: root.episode.view().capturePolicy, providers: root.session.view().hello?.localization?.providers };
+          providers: root.session.view().hello?.localization?.providers };
         observations.push(actual);
-        return actual.label === label && actual.guide === guide && actual.policy === "any_angle";
+        return actual.label === label && actual.guide === guide;
       };
       const select = (providers: ("fiducial_marker" | "vps")[]) => {
         root.episode.reset();
@@ -218,7 +218,7 @@ export function runRegressionCase(scenario: ReviewScenario, id: string): void {
         scenario.after(2.5 + i * .05, () => scenario.press(menu.sensorControls[3]));
       }
       scenario.after(2.3, () => { low = ui.getLidarPreferences().pointLimit === 250; });
-      scenario.after(3.8, () => { high = ui.getLidarPreferences().pointLimit === 4000; });
+      scenario.after(3.8, () => { high = ui.getLidarPreferences().pointLimit === 1000; });
       scenario.later(4, () => off && low && high && ui.getLidarPreferences().fullRangeM <= 10);
       break;
     }

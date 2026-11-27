@@ -68,7 +68,7 @@ for (const phase of ["checking", "installing", "starting", "running", "stopping"
   });
 }
 
-test("pending CAN setup blocks Start without marking DimOS installation incomplete", () => {
+test("pending CAN setup blocks Start without marking dimOS installation incomplete", () => {
   const view = launcherPresentation({
     status: { phase: "ready", check_ok: true }, manipulation: true, simulated: false,
     can: { state: "needs_setup", ready: false }, planner: { ready: true }, settingUp: false,
@@ -79,7 +79,7 @@ test("pending CAN setup blocks Start without marking DimOS installation incomple
   assert.equal(view.startDisabled, true);
 });
 
-test("DimOS install badge stays clear while the planner is pending", () => {
+test("dimOS install badge stays clear while the planner is pending", () => {
   const view = launcherPresentation({
     status: { phase: "ready", check_ok: true }, manipulation: true, simulated: true,
     can: { ready: true }, planner: { ready: false }, settingUp: false,

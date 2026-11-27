@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Apply the macOS system settings DimOS needs for LCM before ARModule boots.
+# Apply the macOS system settings dimOS needs for LCM before ARModule boots.
 #
-# This mirrors DimOS's own macOS LCM configurators
+# This mirrors dimOS's own macOS LCM configurators
 # (dimos/protocol/service/system_configurator/lcm.py) so ARModule can start
-# unattended: the launcher applies these once (with one admin prompt) and DimOS
+# unattended: the launcher applies these once (with one admin prompt) and dimOS
 # then finds them already in place and does not prompt again.
 #
 # The privileged commands live here (single source of truth). Elevation is the
@@ -19,9 +19,9 @@
 
 set -euo pipefail
 
-TARGET_BUF=67108864          # 64 MiB, matches DimOS IDEAL_RMEM_SIZE
+TARGET_BUF=67108864          # 64 MiB, matches dimOS IDEAL_RMEM_SIZE
 MIN_BUF=1048576              # 1 MiB floor when halving down
-TARGET_FILES=65536          # matches DimOS TARGET_FILE_COUNT_LIMIT
+TARGET_FILES=65536          # matches dimOS TARGET_FILE_COUNT_LIMIT
 MULTICAST_NET="224.0.0.0/4"
 LOOPBACK="lo0"
 
@@ -113,7 +113,7 @@ maxfiles_hard() {
 
 maxfiles_ok() {
   # Only a reason to prompt for sudo when the HARD cap is too low; raising the
-  # soft limit up to an adequate hard cap needs no privileges (DimOS does that).
+  # soft limit up to an adequate hard cap needs no privileges (dimOS does that).
   local hard
   hard="$(maxfiles_hard)"
   (( hard >= TARGET_FILES ))
@@ -147,7 +147,7 @@ if [[ "$(id -u)" != "0" ]]; then
   exit 2
 fi
 
-echo "Applying DimOS system prerequisites…"
+echo "Applying dimOS system prerequisites…"
 
 # 1) Multicast route (critical for LCM). Delete any stale route first so the
 #    add cannot fail with "route already in use", then add on loopback.
@@ -185,7 +185,7 @@ ACHIEVED_RECVSPACE="$(apply_buffer "net.inet.udp.recvspace")"
 ACHIEVED_MAXDGRAM="$(apply_buffer "net.inet.udp.maxdgram")"
 echo "Socket buffers set (maxsockbuf=${ACHIEVED_MAXSOCKBUF}, recvspace=${ACHIEVED_RECVSPACE}, maxdgram=${ACHIEVED_MAXDGRAM})."
 
-# Record achieved values in the same state file DimOS reads, so it does not try
+# Record achieved values in the same state file dimOS reads, so it does not try
 # to raise them again (and re-prompt) on the next launch.
 mkdir -p "${STATE_DIR}"
 cat > "${STATE_DIR}/sysctl.json" <<JSON
@@ -195,7 +195,7 @@ if [[ -n "${SUDO_USER:-}" ]]; then
   chown -R "${SUDO_USER}" "${STATE_DIR}" 2>/dev/null || true
 fi
 
-# 3) Open-file hard limit (optional): raise the global cap so DimOS can lift its
+# 3) Open-file hard limit (optional): raise the global cap so dimOS can lift its
 #    soft limit without sudo.
 if ! maxfiles_ok; then
   if launchctl limit maxfiles "${TARGET_FILES}" "${TARGET_FILES}" >/dev/null 2>&1; then

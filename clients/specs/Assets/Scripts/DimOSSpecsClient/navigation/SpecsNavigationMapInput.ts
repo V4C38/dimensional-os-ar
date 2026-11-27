@@ -19,6 +19,7 @@ export class SpecsNavigationMapInput {
   private lastRadius = 0;
   private lastDiameter = 0;
   private disposed = false;
+  private enabled = true;
   constructor(private readonly root: SceneObject, private readonly dataRoot: SceneObject,
     private readonly gesture: SpecsMapGesture, private readonly interactors?: () => readonly MapHand[]) {
     this.add(dataRoot, "NavigationMapFaceHit", "face", "cylinder");
@@ -34,6 +35,8 @@ export class SpecsNavigationMapInput {
     const collider = object.createComponent("Physics.ColliderComponent") as ColliderComponent;
     collider.shape = shape === "sphere" ? Shape.createSphereShape() : Shape.createCylinderShape();
     const interactable = object.createComponent(Interactable.getTypeName()) as Interactable;
+    if (region === "face" || region === "compass" || region === "pin")
+      interactable.targetingMode = TargetingMode.All;
     interactable.onTriggerCanceled.add(event => {
       const id = String(event.interactor.inputType);
       if (this.gesture.owner === id || this.gesture.secondOwner === id) {
@@ -41,6 +44,12 @@ export class SpecsNavigationMapInput {
       }
     });
     this.targets.push({ object, collider, region });
+  }
+  setEnabled(enabled: boolean): void {
+    if (this.enabled === enabled) return;
+    this.enabled = enabled;
+    for (const target of this.targets) target.collider.enabled = enabled;
+    if (!enabled) this.reset();
   }
   layout(snapshot: NavigationMapSnapshot | null): void {
     const center = this.gesture.viewport.centerM, coverage = this.gesture.viewport.radiusM, diameter = this.gesture.diameterM;
@@ -73,13 +82,13 @@ export class SpecsNavigationMapInput {
   ownsControl(object: SceneObject): boolean { return this.targets.slice(1).some(target => target.object === object && target.object.enabled); }
   isCapturingOrPressed(): boolean {
     if (this.gesture.active) return true;
-    if (this.disposed || !this.root.isEnabledInHierarchy) return false;
+    if (this.disposed || !this.enabled || !this.root.isEnabledInHierarchy) return false;
     const mask = InteractorInputType.BothHands | (global.deviceInfoSystem.isEditor() ? InteractorInputType.Mouse : 0);
     return (this.interactors?.() ?? InteractionManager.getInstance().getInteractorsByType(mask)).some(hand =>
       hand.isActive() && hand.isTriggering && this.owns(hand.currentInteractable?.getSceneObject() ?? null));
   }
   tick(time: number, dt: number, rotation: number): void {
-    if (this.disposed || !this.root.isEnabledInHierarchy) { this.reset(); return; }
+    if (this.disposed || !this.enabled || !this.root.isEnabledInHierarchy) { this.reset(); return; }
     const mask = InteractorInputType.BothHands | (global.deviceInfoSystem.isEditor() ? InteractorInputType.Mouse : 0);
     const hands = this.interactors?.() ?? InteractionManager.getInstance().getInteractorsByType(mask);
     const seen = new Set<string>();
@@ -91,7 +100,8 @@ export class SpecsNavigationMapInput {
         this.gesture.release(id, this.pokePoints.get(id)!, time, rotation);
         this.held.delete(id); this.pokePoints.delete(id); this.cancelledUntilRelease.delete(id); continue;
       }
-      if (!hand.isActive() || !hand.startPoint || !hand.direction) {
+      const hasPokeContact = hand.activeTargetingMode === TargetingMode.Poke && !!hand.targetHitPosition;
+      if (!hand.isActive() || ((!hand.startPoint || !hand.direction) && !hasPokeContact)) {
         if (previous || held) this.cancelledUntilRelease.add(id);
         if (this.gesture.owner === id || this.gesture.secondOwner === id) this.gesture.abort(true);
         this.held.delete(id); this.pokePoints.delete(id); continue;
@@ -103,11 +113,12 @@ export class SpecsNavigationMapInput {
       if (!held) this.cancelledUntilRelease.delete(id);
       const insideFace = target?.region !== "face" || !!point && Math.hypot(...point) <= this.gesture.diameterM / 2;
       if (held && !previous && !this.cancelledUntilRelease.has(id) && target && point && insideFace) {
-        const poke = (hand.inputType & InteractorInputType.BothHands) !== 0 &&
-          hand.currentTrigger === InteractorTriggerType.Poke && hand.activeTargetingMode === TargetingMode.Poke;
+        const trackedHand = (hand.inputType & InteractorInputType.BothHands) !== 0;
+        const poke = trackedHand && hand.currentTrigger === InteractorTriggerType.Poke && hand.activeTargetingMode === TargetingMode.Poke;
+        const laser = trackedHand && hand.currentTrigger === InteractorTriggerType.Pinch && hand.activeTargetingMode === TargetingMode.Indirect;
         if (!this.gesture.active) {
-          this.gesture.begin(id, target.region, point, time, rotation, poke);
-          if (poke && target.region === "face") this.pokePoints.set(id, point);
+          this.gesture.begin(id, target.region, point, time, rotation, poke || laser);
+          if (poke) this.pokePoints.set(id, point);
         }
         else {
           const first = this.hands.get(this.gesture.owner ?? ""), firstPoint = first && this.point(first, this.root);
@@ -115,8 +126,14 @@ export class SpecsNavigationMapInput {
           if (firstPoint && secondPoint) this.gesture.beginScale(id, firstPoint, secondPoint);
         }
       }
-      if (held && point && this.pokePoints.has(id) && hand.activeTargetingMode === TargetingMode.Poke)
-        this.pokePoints.set(id, point);
+      if (held && this.pokePoints.has(id)) {
+        if (hand.activeTargetingMode !== TargetingMode.Poke || hand.currentTrigger !== InteractorTriggerType.Poke) {
+          this.pokePoints.delete(id);
+          this.gesture.disallowFaceTap(id);
+        } else if (point) this.pokePoints.set(id, point);
+      } else if (held && previous && (hand.activeTargetingMode !== TargetingMode.Indirect || hand.currentTrigger !== InteractorTriggerType.Pinch)) {
+        this.gesture.disallowFaceTap(id);
+      }
       if (held && this.gesture.secondOwner) {
         const first = this.hands.get(this.gesture.owner ?? ""), second = this.hands.get(this.gesture.secondOwner);
         const a = first && this.point(first, this.root), b = second && this.point(second, this.root);
@@ -141,14 +158,14 @@ export class SpecsNavigationMapInput {
     }
   }
   private point(hand: MapHand, frame: SceneObject): readonly [number, number] | null {
-    if (!hand.startPoint || !hand.direction) return null;
     const inverse = frame.getTransform().getWorldTransform().inverse();
-    const start = inverse.multiplyPoint(hand.startPoint), end = inverse.multiplyPoint(hand.startPoint.add(hand.direction));
-    const direction = end.sub(start);
     if (hand.activeTargetingMode === TargetingMode.Poke && hand.targetHitPosition) {
       const hit = inverse.multiplyPoint(hand.targetHitPosition);
       return [hit.x / 100, -hit.z / 100];
     }
+    if (!hand.startPoint || !hand.direction) return null;
+    const start = inverse.multiplyPoint(hand.startPoint), end = inverse.multiplyPoint(hand.startPoint.add(hand.direction));
+    const direction = end.sub(start);
     if (start.y < -0.4) return null;
     if (direction.y >= -0.0001) {
       if (!hand.targetHitPosition) return null;

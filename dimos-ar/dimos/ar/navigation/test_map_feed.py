@@ -6,7 +6,7 @@ from unittest.mock import patch
 import numpy as np
 import pytest
 
-from dimos.ar.navigation.map_feed import NavigationMapFeed, _encode_crop
+from dimos.ar.navigation.map_feed import NavigationMapFeed, _encode_crop, _remaining_path
 from dimos.ar.replication.interaction import (
     NAVIGATION_MAP_SOURCE,
     InteractionCoordinator,
@@ -43,7 +43,7 @@ def test_native_crop_preserves_cost_rows_and_connected_route() -> None:
     assert len(body) <= 65_536
     segments = np.frombuffer(body[240 * 240 + 12 :], dtype="<f4").reshape(-1, 4)
     assert len(segments) <= 256
-    assert tuple(segments[0, :2]) == (-6.0, 0.0)
+    assert tuple(segments[0, :2]) == (1.0, 0.0)
     assert tuple(segments[-1, 2:]) == (6.0, 0.0)
     np.testing.assert_array_equal(segments[:-1, 2:], segments[1:, :2])
 
@@ -179,3 +179,17 @@ def test_refused_map_target_preserves_the_world_target() -> None:
 
     assert owner.handle(client, request, commit_map=unexpected).status == "rejected"
     assert called == []
+
+
+@pytest.mark.parametrize(("robot", "expected"), [
+    ((1.5, 0.2), ((1.5, 0.0), (2.0, 0.0), (2.0, 2.0))),
+    ((2.0, 1.0), ((2.0, 1.0), (2.0, 2.0))),
+    ((2.0, 3.0), ((2.0, 2.0),)),
+])
+def test_map_route_only_contains_remaining_path(robot, expected) -> None:
+    assert _remaining_path(((0, 0), (1, 0), (2, 0), (2, 2)), robot) == expected
+
+
+def test_remaining_path_handles_empty_and_repeated_points() -> None:
+    assert _remaining_path((), (0, 0)) == ()
+    assert _remaining_path(((0, 0), (0, 0), (2, 0)), (1, 0)) == ((1, 0), (2, 0))

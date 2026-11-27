@@ -63,6 +63,25 @@ it("keeps the runtime palm menu suppressed while setup is open", () => {
   expect(palmTick).toHaveBeenCalledOnce();
 });
 
+it("refreshes world labels while the hidden menu skips snapshot work and refreshes on open", () => {
+  const presenter = new UIPresenter();
+  const panel = { enabled: false }, apply = vi.fn(), refreshRobotLabels = vi.fn();
+  const snapshot = vi.fn(() => ({}));
+  Object.assign(presenter, {
+    uiState: 0, mainUIFrame: panel, setupFlow: { completed: true },
+    deps: { speechController: null, session: { view: () => ({}) } },
+    refreshHud: vi.fn(), refreshRobotLabels, snapshot, mainMenuView: { apply, tick: vi.fn() },
+  });
+  presenter.tick(1 / 60);
+  expect(refreshRobotLabels).toHaveBeenCalledOnce();
+  expect(snapshot).not.toHaveBeenCalled();
+  Object.assign(presenter, { uiState: 1 });
+  panel.enabled = true;
+  presenter.tick(1 / 60);
+  expect(snapshot).toHaveBeenCalledOnce();
+  expect(apply).toHaveBeenCalledWith({});
+});
+
 it("restarts on the next tick without stale scale animations reopening or hiding panels", () => {
   flushAnimations();
   const panel = () => {
@@ -235,23 +254,23 @@ it.each([true, false])("restart preserves the shared owner and resets only fallb
 it("keeps the map open for a read-only replay without enabling navigation", () => {
   vi.stubGlobal("getDeltaTime", () => 1 / 60);
   try {
-    const presenter = new UIPresenter(), update = vi.fn(), setVisible = vi.fn();
+    const presenter = new UIPresenter(), update = vi.fn(), animate = vi.fn(() => true);
     const capability = { available: true, reason: null }, unavailable = { available: false, reason: "Recording" };
     const view = { connection: "ready", hasTrackingOrigin: false, navigationMap: null, nav_goal: null,
       state: { robot_link: { motion_ready: false }, safety: { stopped: false } },
       capabilities: { navigation: { ...unavailable, nav_map: capability, nav_goal: unavailable } } };
-    const visual = { setVisible, place: vi.fn(), setRotation: vi.fn(), loading: vi.fn(), draw: vi.fn() };
+    const visual = { animate, place: vi.fn(), setRotation: vi.fn(), loading: vi.fn(), draw: vi.fn() };
     Object.assign(presenter, {
       setupFlow: { completed: true }, uiState: 1, navMapEnabled: true, navMapClickToWalk: true,
       initialMapHeading: null, navigationMap: { update, gesture: { diameterM: .22, compassEnabled: true, manualRotation: 0 } },
-      navigationMapView: visual, navigationMapInput: { layout: vi.fn(), tick: vi.fn() },
+      navigationMapView: visual, navigationMapInput: { setEnabled: vi.fn(), layout: vi.fn(), tick: vi.fn() },
       mainMenuView: { navigationMapDock: () => ({ position: new vec3(), yaw: 0 }) },
       getOperatingMode: () => "manual", deps: { session: { view: () => view, collaboration: { snapshot: () => ({ blocked: true }) } },
         selection: { snapshot: () => ({ selected: true }) }, clientTrackingOriginStore: { T_map_tracking: null },
         cameraObject: { getTransform: () => ({ getWorldRotation: () => quat.quatIdentity() }) } },
     });
     (presenter as any).tickNavigationMap();
-    expect(update).toHaveBeenCalledWith(true, null, false, true);
-    expect(setVisible).toHaveBeenCalledWith(true); expect(visual.loading).toHaveBeenCalled();
+    expect(update).toHaveBeenCalledWith(true, null, false, true, expect.any(Number));
+    expect(animate).toHaveBeenCalledWith(true, 1 / 60); expect(visual.loading).toHaveBeenCalled();
   } finally { vi.unstubAllGlobals(); }
 });

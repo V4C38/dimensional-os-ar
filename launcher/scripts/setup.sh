@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Set up DimOS + dimos-ar for local development.
+# Set up dimOS + dimos-ar for local development.
 #
 # Usage:
 #   ./launcher/scripts/setup.sh              # interactive first-run setup
-#   ./launcher/scripts/setup.sh --yes        # non-interactive; fail fast if DimOS cannot be auto-detected
+#   ./launcher/scripts/setup.sh --yes        # non-interactive; fail fast if dimOS cannot be auto-detected
 #   ./launcher/scripts/setup.sh --check      # non-destructive readiness probe (for the web launcher)
-#   ./launcher/scripts/setup.sh --yes --dimos-python <path>   # use existing DimOS interpreter
+#   ./launcher/scripts/setup.sh --yes --dimos-python <path>   # use existing dimOS interpreter
 #   ./launcher/scripts/setup.sh --yes --clone-dir <path> [--dimos-ref <branch|tag|sha>]
 #
 # Environment (optional):
-#   DIMOS_PYTHON  Path to Python in an existing DimOS environment
+#   DIMOS_PYTHON  Path to Python in an existing dimOS environment
 #   CI=1          Same as --yes
 
 set -euo pipefail
@@ -159,36 +159,12 @@ run_check() {
 
   if dimos_py="$(find_dimos_python "${ROOT}" 2>/dev/null)"; then
     dimos_status="installed (${dimos_py})"
-    dimos_version="$("${dimos_py}" - <<'PY' 2>/dev/null || true
-from importlib.metadata import PackageNotFoundError, version
-try:
-    print(version("dimos"), end="")
-except PackageNotFoundError:
-    pass
-PY
-)"
-    dimos_ref="$("${dimos_py}" - <<'PY' 2>/dev/null || true
-import inspect
-import pathlib
-import subprocess
-import dimos
-
-src = pathlib.Path(inspect.getfile(dimos)).resolve().parent.parent
-if not (src / ".git").is_dir():
-    print("wheel", end="")
-    raise SystemExit(0)
-
-def git(*args: str) -> str:
-    return subprocess.check_output(["git", "-C", str(src), *args], text=True).strip()
-
-try:
-    branch = git("rev-parse", "--abbrev-ref", "HEAD")
-    desc = git("describe", "--always", "--dirty")
-    print(f"{branch} {desc}", end="")
-except subprocess.CalledProcessError:
-    print("unknown", end="")
-PY
-)"
+    while IFS= read -r metadata; do
+      case "${metadata}" in
+        DIMOS_VERSION=*) dimos_version="${metadata#DIMOS_VERSION=}" ;;
+        DIMOS_REF=*) dimos_ref="${metadata#DIMOS_REF=}" ;;
+      esac
+    done < <("${dimos_py}" "${ROOT}/launcher/app/dimos_installation.py" --metadata 2>/dev/null)
     if python_is_312 "${dimos_py}"; then
       ar_code="$(python_dimos_ar_status "${dimos_py}" || true)"
     else
@@ -211,12 +187,12 @@ PY
     esac
   fi
 
-  echo "DimOS: ${dimos_status}"
+  echo "dimOS: ${dimos_status}"
   if [[ -n "${dimos_version}" ]]; then
-    echo "DimOS version: ${dimos_version}"
+    echo "dimOS version: ${dimos_version}"
   fi
   if [[ -n "${dimos_ref}" ]]; then
-    echo "DimOS ref: ${dimos_ref}"
+    echo "dimOS ref: ${dimos_ref}"
   fi
   echo "dimos-ar: ${ar_status}"
   if openai_api_key_is_set "${ROOT}"; then
@@ -250,7 +226,7 @@ fi
 prompt_for_existing_dimos_python() {
   local candidate=""
   while true; do
-    read -r -p "Enter the path to the Python executable in your DimOS environment: " candidate
+    read -r -p "Enter the path to the Python executable in your dimOS environment: " candidate
     if [[ -z "${candidate}" ]]; then
       echo "A Python path is required." >&2
       continue
@@ -274,7 +250,7 @@ ensure_dimos_clone() {
   local bootstrap_python="$2"
 
   if "${bootstrap_python}" "${ROOT}/launcher/app/dimos_installation.py" "${dimos_dir}"; then
-    echo "Reusing existing DimOS clone: ${dimos_dir}" >&2
+    echo "Reusing existing dimOS clone: ${dimos_dir}" >&2
     checkout_dimos_ref "${dimos_dir}"
     printf '%s\n' "${dimos_dir}"
     return 0
@@ -290,7 +266,7 @@ ensure_dimos_clone() {
     fi
   fi
 
-  echo "Cloning DimOS into: ${dimos_dir}" >&2
+  echo "Cloning dimOS into: ${dimos_dir}" >&2
   git clone "https://github.com/dimensionalOS/dimos" "${dimos_dir}" 1>&2
   checkout_dimos_ref "${dimos_dir}"
   printf '%s\n' "${dimos_dir}"
@@ -300,7 +276,7 @@ checkout_dimos_ref() {
   local dimos_dir="$1"
   local ref="${FLAG_DIMOS_REF:-}"
   [[ -n "${ref}" ]] || return 0
-  echo "Checking out DimOS ref: ${ref}" >&2
+  echo "Checking out dimOS ref: ${ref}" >&2
   git -C "${dimos_dir}" fetch --tags origin 1>&2
   # The chooser lists remote branch names, which may have stale local branches.
   if git -C "${dimos_dir}" show-ref --verify --quiet "refs/remotes/origin/${ref}"; then
@@ -337,8 +313,8 @@ resolve_dimos_python() {
       exit 1
     fi
     if ! python_has_dimos "${FLAG_DIMOS_PYTHON}"; then
-      echo "Warning: not a DimOS environment (no 'dimos' package): ${FLAG_DIMOS_PYTHON}" >&2
-      echo "Select a DimOS environment or use --clone-dir." >&2
+      echo "Warning: not a dimOS environment (no 'dimos' package): ${FLAG_DIMOS_PYTHON}" >&2
+      echo "Select a dimOS environment or use --clone-dir." >&2
       exit 1
     fi
     DIMOS_ENV_PYTHON="${FLAG_DIMOS_PYTHON}"
@@ -364,15 +340,15 @@ resolve_dimos_python() {
     exit 1
   fi
 
-  if ask_yes_no "Is DimOS already installed on this Mac?" "n"; then
+  if ask_yes_no "Is dimOS already installed on this Mac?" "n"; then
     if found="$(find_dimos_python "${ROOT}")"; then
-      echo "Detected DimOS Python: ${found}" >&2
+      echo "Detected dimOS Python: ${found}" >&2
       if ask_yes_no "Use this interpreter?" "y"; then
         DIMOS_ENV_PYTHON="${found}"
         return 0
       fi
     else
-      echo "Auto-detection did not find DimOS." >&2
+      echo "Auto-detection did not find dimOS." >&2
     fi
     DIMOS_ENV_PYTHON="$(prompt_for_existing_dimos_python)"
     return 0
@@ -383,24 +359,24 @@ resolve_dimos_python() {
     exit 1
   fi
 
-  dimos_dir="$(prompt_with_default "Where should DimOS be cloned?" "${DEFAULT_DIMOS_DIR}")"
-  FLAG_DIMOS_REF="$(prompt_with_default "DimOS git ref (branch, tag, or SHA)?" "${FLAG_DIMOS_REF:-$(cat "${ROOT}/.dimos-revision")}")"
+  dimos_dir="$(prompt_with_default "Where should dimOS be cloned?" "${DEFAULT_DIMOS_DIR}")"
+  FLAG_DIMOS_REF="$(prompt_with_default "dimOS git ref (branch, tag, or SHA)?" "${FLAG_DIMOS_REF:-$(cat "${ROOT}/.dimos-revision")}")"
   install_dimos_from_clone "${dimos_dir}" "${bootstrap_python}"
 }
 
-echo "Resolving DimOS environment..."
+echo "Resolving dimOS environment..."
 if [[ -n "${FLAG_DIMOS_REF}" ]]; then
-  echo "DimOS ref: ${FLAG_DIMOS_REF}"
+  echo "dimOS ref: ${FLAG_DIMOS_REF}"
 fi
 DIMOS_INSTALL_SOURCE=""
 DIMOS_ENV_PYTHON=""
 resolve_dimos_python
 
 if ! python_is_312 "${DIMOS_ENV_PYTHON}"; then
-  echo "DimOS AR requires Python 3.12. Select a Python 3.12 environment or a new clone directory." >&2
+  echo "dimOS AR requires Python 3.12. Select a Python 3.12 environment or a new clone directory." >&2
   exit 1
 fi
-echo "Using DimOS Python: ${DIMOS_ENV_PYTHON}"
+echo "Using dimOS Python: ${DIMOS_ENV_PYTHON}"
 
 echo "Installing dimos-ar into that environment..."
 (
@@ -426,7 +402,7 @@ echo "Installing dimos-ar into that environment..."
 )
 
 if ! python_has_dimos_ar "${DIMOS_ENV_PYTHON}"; then
-  echo "DimOS at ${DIMOS_ENV_PYTHON} cannot run dimos-ar blueprints after install." >&2
+  echo "dimOS at ${DIMOS_ENV_PYTHON} cannot run dimos-ar blueprints after install." >&2
   echo "Need import dimos.ar and dimos.blueprints entry points unitree-go2-ar / unitree-go2-ar-agentic." >&2
   exit 1
 fi
@@ -445,6 +421,6 @@ Next steps:
   ./launcher/scripts/start.sh
   ./launcher/scripts/start-launcher.sh
 
-If DimOS lives somewhere unusual, you can always override auto-detection with:
+If dimOS lives somewhere unusual, you can always override auto-detection with:
   DIMOS_PYTHON=/path/to/dimos/.venv/bin/python3 ./launcher/scripts/start.sh
 EOF

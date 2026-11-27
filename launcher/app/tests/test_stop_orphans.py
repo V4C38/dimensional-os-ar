@@ -199,4 +199,4 @@ async def test_explicit_stop_cleans_up_only_previous_blueprint_groups(tmp_path, 
 
     await manager.stop_armodule(include_previous=True)
 
-    stop_group.assert_awaited_once_with(6228, "previous DimOS blueprint", STOP_GRACE_SECONDS)
+    stop_group.assert_awaited_once_with(6228, "previous dimOS blueprint", STOP_GRACE_SECONDS)

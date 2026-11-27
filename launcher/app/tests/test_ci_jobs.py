@@ -53,3 +53,17 @@ def test_github_uses_only_shared_ci_jobs() -> None:
     assert commands == [f"./launcher/scripts/run-ci.sh {job}"
                         for job in ("backend", "launcher", "core", "specs", "webxr")]
     assert "run: |" not in workflow
+
+
+def test_specs_hydration_selects_the_tracked_core_package() -> None:
+    script = (ROOT / "launcher/scripts/run-ci.sh").read_text()
+    job = re.search(r"(?ms)^run_client_specs_job\(\) \{\n.*?^\}", script)
+    assert job is not None
+    selection = re.search(r'hydrate_existing_lfs "([^"]+)"', job.group())
+    assert selection is not None
+    tracked = subprocess.check_output(
+        ["git", "-C", str(ROOT), "ls-files", "clients/specs/Packages/"], text=True
+    ).splitlines()
+    assert [pattern for pattern in selection[1].split(",") if pattern.endswith(".lspkg")] == [
+        path for path in tracked if path.endswith("/DimOSARClient.lspkg")
+    ]

@@ -1,4 +1,4 @@
-"""Adapt DimOS's optional saved-map TF into the localization frame owner."""
+"""Adapt dimOS's optional saved-map TF into the localization frame owner."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ class NativeMapAdapter:
             matrix, self._previous, rtol=0, atol=1e-8
         ):
             return None
-        # DimOS publishes T_world_map, while our owner accepts T_native_odom.
+        # dimOS publishes T_world_map, while our owner accepts T_native_odom.
         normalized = normalize_pose_estimate(
             np.asarray(np.linalg.inv(matrix), dtype=np.float64), max_tilt_rad=math.radians(5)
         )

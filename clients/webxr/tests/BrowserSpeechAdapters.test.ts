@@ -92,7 +92,7 @@ it("reports missing media support without falsely claiming permission was denied
 
 it("shows the server's actionable dictation setup reason before requesting a microphone", () => {
   const f = recorderFixture(), error = vi.fn();
-  const reason = "Install the speech extra in the selected DimOS environment, then reconnect.";
+  const reason = "Install the speech extra in the selected dimOS environment, then reconnect.";
   const port = recordedRecognition({ available: () => false, availabilityError: () => reason, transcribe: vi.fn() })!;
   port.start(vi.fn(), error, vi.fn(), vi.fn());
   expect(error).toHaveBeenCalledWith(reason);

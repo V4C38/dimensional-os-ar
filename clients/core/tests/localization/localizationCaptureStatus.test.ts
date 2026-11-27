@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { localizationCaptureStatus } from "../../src/presentation/ControlPanelPresentation";
 import type { ARModuleSessionState } from "../../src/websocket/ARModuleSession";
-import type { LocalizationCapturePhase } from "../../src/localization/LocalizationCaptureEpisode";
 
 function view(overrides: Partial<ARModuleSessionState> = {}): ARModuleSessionState {
   return {
@@ -26,20 +25,17 @@ describe("localizationCaptureStatus", () => {
       localization: { available: true, reason: null },
     } as ARModuleSessionState["capabilities"] });
     expect(localizationCaptureStatus(session, { phase: "capturing", lastError: null,
-      capturePolicy: "any_angle" }).text).toBe("Scanning .\nLook around the mapped room");
+      purpose: "headset" }).text).toBe("Scanning .\nLook around the mapped room");
   });
-  it.each<LocalizationCapturePhase>(["capturing", "awaiting_result"])(
-    "keeps scan guidance stable during %s without implying frames are marker sightings",
-    (phase) => {
-      const session = view({ connection: "ready", capabilities: {
-        localization: { available: true, reason: null },
-      } as ARModuleSessionState["capabilities"] });
-      const status = localizationCaptureStatus(session, {
-        phase, lastError: null, capturedCount: 1, observationCount: 3,
-      });
-      expect(status.text).toBe("Scanning .\nLook at the marker");
-    },
-  );
+  it("asks for the marker while capturing fiducial frames and reports when the batch is being checked", () => {
+    const session = view({ connection: "ready", capabilities: {
+      localization: { available: true, reason: null },
+    } as ARModuleSessionState["capabilities"] });
+    expect(localizationCaptureStatus(session, { phase: "capturing", purpose: "robot", lastError: null }).text)
+      .toBe("Scanning .\nLook at the marker");
+    expect(localizationCaptureStatus(session, { phase: "awaiting_result", purpose: "robot", lastError: null }).text)
+      .toBe("Checking the capture…");
+  });
 
   it("animates one, two, three dots and shows runtime scans despite an existing origin", () => {
     const session = view({ connection: "ready", hasTrackingOrigin: true, capabilities: {

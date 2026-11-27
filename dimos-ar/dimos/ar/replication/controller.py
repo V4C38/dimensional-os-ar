@@ -1,4 +1,4 @@
-"""Application interaction orchestration, separate from DimOS stream wiring.
+"""Application interaction orchestration, separate from dimOS stream wiring.
 
 The coordinator owns replicated facts; this controller owns asynchronous mode
 changes, native input admission, and delivery. Native services keep their own

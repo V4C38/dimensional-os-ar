@@ -6,7 +6,8 @@ import type { ReadonlyFacts, Quat, Vec3 } from "DimOSARClient.lspkg/Scripts/DimO
 import { clientTrackingToSpecsPoint } from "../utilities/SpecsCoordinates";
 
 const DOT_MATERIAL = requireAsset("../../../Materials/LidarDot.mat") as Material;
-const MAX_POINTS = 4000;
+export const SPECS_LIDAR_MAX_POINTS = 1000;
+const CORNERS = [[0, 0], [1, 0], [0, 1], [1, 1]] as const;
 
 export function composeLidarPoint(point: Readonly<Vec3>, origin: ReadonlyFacts<ClientTrackingOrigin>): Vec3 {
   return clientTrackingToSpecsPoint(mapToClientTrackingPoint(point, origin));
@@ -14,17 +15,21 @@ export function composeLidarPoint(point: Readonly<Vec3>, origin: ReadonlyFacts<C
 
 @component
 export class PointCloudRenderer extends BaseScriptComponent {
-  @input("int", "1500")
-  maxPoints: number = 1500;
+  @input("int", "1000")
+  maxPoints: number = SPECS_LIDAR_MAX_POINTS;
 
   private visual: RenderMeshVisual | null = null;
   private builder: MeshBuilder | null = null;
   private readonly indices: number[] = [];
+  private readonly vertices: number[] = [];
+  private nextCloudAt = -Infinity;
+  private lastStyle: readonly (number | string | undefined)[] = [];
+  private viewportHeight = 0;
   private positions: readonly Vec3[] = [];
   private positionPoints: readonly Readonly<Vec3>[] | null = null;
   private positionOrigin: ReadonlyFacts<ClientTrackingOrigin> | null = null;
   private readonly sampler = new LidarFrameSampler<ReadonlyFacts<ClientTrackingOrigin>>(composeLidarPoint,
-    { maximum: MAX_POINTS, minimum: 250, default: 1500 });
+    { maximum: SPECS_LIDAR_MAX_POINTS, minimum: 250, default: SPECS_LIDAR_MAX_POINTS });
   private diagnosticRobot: Readonly<Vec3> | null = null;
 
   onAwake(): void {
@@ -37,7 +42,7 @@ export class PointCloudRenderer extends BaseScriptComponent {
     pass.blendMode = BlendMode.Normal; pass.depthWrite = false; pass.twoSided = true;
     this.builder = new MeshBuilder([{ name: "position", components: 3 }, { name: "color", components: 4 }, { name: "texture0", components: 2 }]);
     this.builder.topology = MeshTopology.Triangles; this.builder.indexType = MeshIndexType.UInt16;
-    for (let i = 0; i < MAX_POINTS; i++) {
+    for (let i = 0; i < SPECS_LIDAR_MAX_POINTS; i++) {
       const v = i * 4; this.indices.push(v, v + 1, v + 2, v + 2, v + 1, v + 3);
     }
     this.hide();
@@ -49,24 +54,38 @@ export class PointCloudRenderer extends BaseScriptComponent {
     const mode = input.mode ?? "full", points = input.points, origin = input.origin;
     if (!origin || !points?.length || mode === "off") { this.hide(); return; }
     if (!this.visual || !this.builder) throw new Error("PointCloudRenderer is not initialized");
+    const height = input.viewportHeight ?? 1024;
+    if (this.viewportHeight !== height) {
+      (this.visual.mainMaterial.mainPass as Pass & { viewportHeightPx: number }).viewportHeightPx = height;
+      this.viewportHeight = height;
+    }
+    const pointLimit = Math.min(SPECS_LIDAR_MAX_POINTS, input.pointLimit ?? this.maxPoints);
+    const [length, width] = input.bounds ?? [];
+    const [lastMode, lastLimit, lastRange, lastHeight, lastLength, lastWidth] = this.lastStyle;
+    const settingsChanged = !this.visual.enabled || origin !== this.positionOrigin || mode !== lastMode ||
+      pointLimit !== lastLimit || input.obstacleRangeM !== lastRange || input.baseHeightM !== lastHeight ||
+      length !== lastLength || width !== lastWidth;
+    const now = getTime();
+    if (!settingsChanged && (points === this.positionPoints || now < this.nextCloudAt)) return;
+    this.lastStyle = [mode, pointLimit, input.obstacleRangeM, input.baseHeightM, length, width];
+    this.nextCloudAt = now + 1;
     this.diagnosticRobot = input.robot ?? null;
-    const frame = this.sampler.sample({ ...input, points, origin, mode,
-      pointLimit: input.pointLimit ?? this.maxPoints });
+    const frame = this.sampler.sample({ ...input, points, origin, mode, pointLimit });
     // Like WebXR's scene-root point cloud, these vertices are already in world
     // coordinates. Keep authored/ancestor transforms out of the cloud entirely.
     const transform = this.getSceneObject().getTransform();
     transform.setWorldPosition(vec3.zero()); transform.setWorldRotation(quat.quatIdentity());
     transform.setWorldScale(vec3.one());
-    (this.visual.mainMaterial.mainPass as Pass & { viewportHeightPx: number }).viewportHeightPx = input.viewportHeight ?? 1024;
     this.visual.enabled = true;
     if (!frame.positionsChanged && !frame.colorsChanged) return;
     this.positions = frame.positions;
     this.positionPoints = points;
     this.positionOrigin = origin;
     const count = frame.positions.length;
-    const vertices: number[] = [];
+    const vertices = this.vertices;
+    vertices.length = 0;
     for (let i = 0; i < count; i++) {
-      for (const [u, v] of [[0, 0], [1, 0], [0, 1], [1, 1]]) {
+      for (const [u, v] of CORNERS) {
         vertices.push(...frame.positions[i], ...frame.colors[i], u, v);
       }
     }
@@ -92,6 +111,6 @@ export class PointCloudRenderer extends BaseScriptComponent {
           renderedWorldCm: [renderedWorld.x, renderedWorld.y, renderedWorld.z], screen: [screen.x, screen.y] };
       }) };
   }
-  hide(): void { if (this.visual) this.visual.enabled = false; }
+  hide(): void { if (this.visual?.enabled) this.visual.enabled = false; }
   clear(): void { this.hide(); this.sampler.clear(); this.positionPoints = null; this.positionOrigin = null; }
 }

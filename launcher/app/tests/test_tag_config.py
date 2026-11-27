@@ -1,4 +1,4 @@
-"""AprilTag UI fields convert to DimOS FiducialMarkerMount JSON."""
+"""AprilTag UI fields convert to dimOS FiducialMarkerMount JSON."""
 
 from __future__ import annotations
 

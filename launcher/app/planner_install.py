@@ -1,4 +1,4 @@
-"""Preserve a selected editable DimOS checkout when installing its planning extra."""
+"""Preserve a selected editable dimOS checkout when installing its planning extra."""
 
 from __future__ import annotations
 

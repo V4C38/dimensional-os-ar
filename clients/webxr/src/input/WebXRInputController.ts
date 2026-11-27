@@ -70,6 +70,7 @@ export interface WebXRInputPorts {
 type InputSource = xb.SelectEvent["target"];
 type PrimaryGesture =
   | { kind: "navigationMap"; source: InputSource; target: THREE.Object3D; direct: boolean }
+  | { kind: "mapControl"; source: InputSource }
   | { kind: "navigation"; source: InputSource; fromMarker: boolean }
   | { kind: "arm"; source: InputSource }
   | { kind: "armPanel"; source: InputSource; grip: boolean }
@@ -85,6 +86,7 @@ type TouchContact = { object: THREE.Mesh; point: THREE.Vector3; distance: number
 export class WebXRInputSession {
   private primary: PrimaryGesture | null = null;
   get navigationMapHold() { return this.primary?.kind === "navigationMap" ? this.primary : null; }
+  get mapControlHold() { return this.primary?.kind === "mapControl" ? this.primary.source : null; }
   get worldHold() { return this.primary?.kind === "navigation" ? this.primary.source : null; }
   get holdFromMarker() { return this.primary?.kind === "navigation" && this.primary.fromMarker; }
   get panelHold() { return this.primary?.kind === "panel" ? this.primary.source : null; }
@@ -185,7 +187,8 @@ export class PanelInputPresenter {
   private palmOpened = false;
   private session: XRSession | null = null;
   constructor(private readonly ui: WebXRInputPorts["ui"], private readonly menu: () => MainMenuView | null,
-    private readonly holdingPanel: () => boolean, private readonly captured: () => boolean) {}
+    private readonly holdingPanel: () => boolean, private readonly captured: () => boolean,
+    private readonly holdingMap: () => boolean = () => false) {}
   detachAnchor(): void { this.menuAnchor.detach(); this.palmOpened = false; }
   offsetForNavigationMapResize(deltaRadius: number): void {
     const menu = this.menu();
@@ -237,7 +240,7 @@ export class PanelInputPresenter {
       if (!this.holdingPanel()) this.setupPlacement.update(this.menu()!.panel, new THREE.Vector3(p.x, p.y, p.z), new THREE.Quaternion(q.x, q.y, q.z, q.w), deltaS, setupOpening);
     } else {
       if (visible && !this.menuWasVisible && !this.menuAnchor.source) this.placeMenuInFront(p, q);
-      if (visible && this.menuAnchor.source && !this.holdingPanel()) {
+      if (visible && this.menuAnchor.source && !this.holdingPanel() && !this.holdingMap()) {
         const pose = this.anchorPose(this.menuAnchor.source, frame, reference);
         if (pose && this.menu()) this.menuAnchor.update(pose.position, new THREE.Vector3(p.x, p.y, p.z), this.menu()!.panel, deltaS, pose.orientation);
       }
@@ -347,7 +350,8 @@ export class WebXRInputController {
       tracking(): boolean;
       microphone?: BrowserMicrophonePermission;
     }) {
-    this.panels = new PanelInputPresenter(client.ui, () => this.mainMenu, () => this.gestures.panelHold !== null, () => this.gestures.owner !== null);
+    this.panels = new PanelInputPresenter(client.ui, () => this.mainMenu, () => this.gestures.panelHold !== null, () => this.gestures.owner !== null,
+      () => this.gestures.navigationMapHold !== null || this.gestures.mapControlHold !== null);
   }
 
   setEnabled(enabled: boolean): void { this.interaction?.setEnabled(enabled); }
@@ -831,6 +835,21 @@ export class WebXRInputController {
   }
 
   private dispatchTouch(source: xb.SelectEvent["target"], contact: { object: THREE.Mesh; point: THREE.Vector3; distance: number }, start: boolean, cancelled: boolean): void {
+    if (this.map?.isPokeControl(contact.object)) {
+      const eligible = this.tracking && this.session?.visibilityState === "visible" &&
+        this.client.ui.menuOpen && this.client.isRobotSelected() && this.map.canInteract(contact.object, contact.point);
+      if (start) {
+        if (eligible && !this.gestures.owner && this.gestures.authorize(source, contact.object)) {
+          this.gestures.begin({ kind: "mapControl", source });
+        }
+      } else if (this.gestures.mapControlHold === source) {
+        if (!cancelled && eligible && this.gestures.activate(source.userData.id ?? -1, contact.object)) {
+          this.map.activateControl(contact.object, performance.now());
+        }
+        this.clearInput(cancelled || !eligible ? "cancelled" : "release");
+      }
+      return;
+    }
     if (contact.object.userData.manipulationAction === "gripper" && source.inputSource?.hand &&
         this.gestures.manipulationHold && this.gestures.manipulationHold !== source) {
       const id = this.navigationSourceId(source);

@@ -33,7 +33,7 @@ const HELLO_FIXTURE = { ...helloAt(1234.567), time_sync: { ts_client: 1234.567, 
 
 it("preserves actionable local-dictation availability and bounds its setup reason", () => {
   const unavailable = { ...HELLO_FIXTURE, speech_transcription: false,
-    speech_transcription_reason: "Install the speech extra in the selected DimOS environment." };
+    speech_transcription_reason: "Install the speech extra in the selected dimOS environment." };
   expect(decodeOutbound(JSON.stringify(unavailable))).toMatchObject({
     speech_transcription: false, speech_transcription_reason: unavailable.speech_transcription_reason,
   });

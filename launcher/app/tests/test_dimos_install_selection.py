@@ -9,7 +9,7 @@ import dimos_installation
 
 
 def test_checkout_with_spaces_preserves_venv_symlink(tmp_path, monkeypatch):
-    checkout = tmp_path / "my DimOS install"
+    checkout = tmp_path / "my dimOS install"
     bin_dir = checkout / ".venv" / "bin"
     bin_dir.mkdir(parents=True)
     shared_python = tmp_path / "shared-python"
@@ -26,7 +26,7 @@ def test_checkout_with_spaces_preserves_venv_symlink(tmp_path, monkeypatch):
 
 
 def test_checkout_without_environment_explains_folder_requirement(tmp_path):
-    with pytest.raises(ValueError, match="DimOS install folder"):
+    with pytest.raises(ValueError, match="dimOS install folder"):
         dimos_installation.resolve_dimos_python(str(tmp_path))
 
 
@@ -81,7 +81,7 @@ def test_source_setup_installs_dimos_and_ar_in_one_transaction(tmp_path, existin
     scripts.mkdir(parents=True)
     (tmp_path / "dimos-ar").mkdir()
     (tmp_path / ".dimos-revision").write_text("tested-main-commit\n")
-    source = tmp_path / "chosen DimOS"
+    source = tmp_path / "chosen dimOS"
     (source / ".git").mkdir(parents=True)
     (source / "pyproject.toml").write_text('[project]\nname="dimos"\n')
     interpreter = source / ".venv" / "bin" / "python3"
@@ -146,7 +146,7 @@ async def test_native_chooser_preserves_selection_and_cancellation(tmp_path, mon
     spawn = AsyncMock(return_value=proc)
     monkeypatch.setattr(launcher_app.asyncio, "create_subprocess_exec", spawn)
     assert await launcher_app._choose_path("Choose", directory=tmp_path if directory else None,
-                                          file_filter=None if directory else "Replay | *.db") == "/chosen path"
+                                          file_filter=None if directory else "Replay | *.db", folders=directory) == "/chosen path"
     args = spawn.call_args.args
     assert "choose folder" in args[-1] if platform == "darwin" else "--file-filter=Replay | *.db" in args
     if platform == "darwin":

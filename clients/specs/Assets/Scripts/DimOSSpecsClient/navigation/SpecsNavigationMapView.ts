@@ -5,10 +5,7 @@ import { createText, COLOR_WHITE } from "../presentation/UIKit";
 import { SpecsMapPixels, projectSpecsMap } from "./SpecsMapGesture";
 
 const IMAGE_MATERIAL = requireAsset("SpectaclesUIKit.lspkg/Materials/Image.mat") as Material;
-const SEGMENTS = 72;
-// Height samples are small map accents on Spectacles; bound mesh work and draw
-// load independently of the source cloud size while retaining its full extent.
-const MAX_HEIGHT_SAMPLES = 64;
+const SEGMENTS = 48;
 
 /** Native map geometry; input, panel positioning and subscriptions are owned separately. */
 export class SpecsNavigationMapView {
@@ -23,7 +20,6 @@ export class SpecsNavigationMapView {
   private readonly ghost: WorldMeshRenderer;
   private readonly heading: AdaptiveStrokeRenderer;
   private readonly tether: AdaptiveStrokeRenderer;
-  private readonly heights: WorldMeshRenderer;
   private readonly resizeLeft: WorldMeshRenderer;
   private readonly resizeRight: WorldMeshRenderer;
   private readonly compass: WorldMeshRenderer;
@@ -50,6 +46,7 @@ export class SpecsNavigationMapView {
   private loadingDiameter = 0;
   private controlsDiameter = 0;
   private rotation: number | null = null;
+  private appearance = 0;
   private lastGhost: readonly [number, number] | null = null;
   private disposed = false;
   private textureUploads = 0;
@@ -65,13 +62,18 @@ export class SpecsNavigationMapView {
     this.background = new WorldMeshRenderer(this.dataRoot, "NavigationMapBackground");
     this.rim = new WorldMeshRenderer(this.root, "NavigationMapRim");
     this.route = new AdaptiveStrokeRenderer(this.dataRoot, "NavigationMapRoute");
+    this.route.minimumPixels = 1;
     this.heading = new AdaptiveStrokeRenderer(this.dataRoot, "NavigationMapHeading");
     this.tether = new AdaptiveStrokeRenderer(this.dataRoot, "NavigationMapTether");
     this.robot = this.marker("NavigationMapRobot", 0.8);
-    this.target = this.marker("NavigationMapTarget", 0.9);
+    this.target = new WorldMeshRenderer(this.dataRoot, "NavigationMapTarget");
+    // Flat arrow pointing to map north.
+    this.target.triangles([0, 0, -1.5, -0.9, 0, 0.9, 0, 0, 0.45, 0.9, 0, 0.9],
+      [0, 1, 2, 0, 2, 3], [1, 1, 1, 1], undefined, [0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]);
     this.ghost = this.marker("NavigationMapGhost", 0.9);
     this.ghost.hide();
-    this.heights = new WorldMeshRenderer(this.dataRoot, "NavigationMapHeights");
+    this.heading.segments([[0, 0, 0], [0.9, 0, 0]], 0.2, 1, 10000, 0);
+    this.tether.segments([[0, 0.2, 0], [0, 3.3, 0]], 0.1, 1, 0.2, 0.2);
     this.resizeLeft = new WorldMeshRenderer(this.root, "NavigationMapResizeLeft");
     this.resizeRight = new WorldMeshRenderer(this.root, "NavigationMapResizeRight");
     this.compass = new WorldMeshRenderer(this.root, "NavigationMapCompass");
@@ -90,13 +92,26 @@ export class SpecsNavigationMapView {
     visual.triangles(geometry.positions, geometry.indices, [1, 1, 1, 1], undefined, geometry.normals);
     return visual;
   }
-  setVisible(visible: boolean): void { this.root.enabled = visible; }
+  setVisible(visible: boolean): void {
+    this.appearance = visible ? 1 : 0;
+    this.root.enabled = visible;
+  }
+  animate(open: boolean, dt: number): boolean {
+    const progress = Math.max(0, Math.min(1, this.appearance + (open ? 1 : -1) * dt / 0.2));
+    if (progress !== this.appearance) {
+      this.appearance = progress;
+      this.root.enabled = progress > 0;
+      if (this.root.enabled) this.root.getTransform().setWorldScale(vec3.one().uniformScale(this.worldScale()));
+    }
+    return open && progress > 0.35;
+  }
+  private worldScale(): number { return 0.75 * Math.max(0.001, 1 - (1 - this.appearance) ** 3); }
   place(lowerEdge: vec3, yaw: number, diameterM: number): void {
     const scale = 0.75, radiusCm = diameterM * 50 * scale;
     const transform = this.root.getTransform();
     transform.setWorldPosition(lowerEdge.add(new vec3(Math.sin(yaw) * radiusCm, -6 * scale, Math.cos(yaw) * radiusCm)));
     transform.setWorldRotation(quat.angleAxis(yaw, vec3.up()));
-    transform.setWorldScale(vec3.one().uniformScale(scale));
+    transform.setWorldScale(vec3.one().uniformScale(this.worldScale()));
   }
   setRotation(radians: number): void {
     if (this.rotation === radians) return;
@@ -113,36 +128,60 @@ export class SpecsNavigationMapView {
     const converted = this.pixels.update(snapshot);
     if (converted) this.uploadTexture(snapshot.width, snapshot.height, converted);
     const center = viewport.centerM;
-    const changed = snapshot !== this.lastSnapshot || center !== this.lastCenter || viewport.radiusM !== this.lastRadius || diameterM !== this.lastDiameter;
+    const previous = this.lastSnapshot;
+    const viewportChanged = center !== this.lastCenter || viewport.radiusM !== this.lastRadius || diameterM !== this.lastDiameter;
+    const changed = snapshot !== previous || viewportChanged;
     if (changed) {
       this.geometryUpdates++;
-      const frame = projectSpecsMap(snapshot, viewport, diameterM), radiusCm = frame.radius * 100;
+      const routeChanged = !previous || viewportChanged || previous.route.length !== snapshot.route.length ||
+        snapshot.route.some((segment, i) => segment.some((coordinate, j) => coordinate !== previous.route[i][j]));
+      const frame = projectSpecsMap(snapshot, viewport, diameterM, routeChanged), radiusCm = frame.radius * 100;
       this.projected = frame;
-      this.drawDisc(snapshot, center, viewport.radiusM, radiusCm);
+      if (!previous || viewportChanged || previous.width !== snapshot.width || previous.height !== snapshot.height ||
+          previous.resolution !== snapshot.resolution || previous.origin[0] !== snapshot.origin[0] || previous.origin[1] !== snapshot.origin[1])
+        this.drawDisc(snapshot, center, viewport.radiusM, radiusCm);
       if (diameterM !== this.lastDiameter || wasLoading) {
         const ring = circleMesh(radiusCm * 1.015, radiusCm * 0.05, 1, SEGMENTS);
         this.rim.triangles(ring.positions, ring.indices, [0.125, 0.125, 0.13, 1]);
       }
-      const segments: [number, number, number][] = [];
-      for (const [x1, y1, x2, y2] of frame.route) segments.push([x1 * 100, 0.3, -y1 * 100], [x2 * 100, 0.3, -y2 * 100]);
-      this.route.segments(segments, 0.15, 1, 10000, 0);
+      if (routeChanged) {
+        const segments: [number, number, number][] = [], opacities: number[] = [];
+        const total = frame.route.reduce((sum, [ax, ay, bx, by]) => sum + Math.hypot(bx - ax, by - ay), 0);
+        const fade = Math.min(0.012, total / 2);
+        let distance = 0;
+        for (const [ax, ay, bx, by] of frame.route) {
+          const length = Math.hypot(bx - ax, by - ay);
+          if (length < 1e-6) continue;
+          const cuts = [0, ...[...new Set([fade, total / 2, total - fade])].filter(d => d > distance && d < distance + length)
+            .map(d => (d - distance) / length), 1];
+          for (let i = 1; i < cuts.length; i++) for (const t of [cuts[i - 1], cuts[i]]) {
+            segments.push([(ax + (bx - ax) * t) * 100, 0.3, -(ay + (by - ay) * t) * 100]);
+            const along = distance + t * length;
+            opacities.push(Math.max(0, Math.min(1, along / fade, (total - along) / fade)));
+          }
+          distance += length;
+        }
+        this.route.segments(segments, 0.15, 1, 10000, 0, true, [1, 1, 1], opacities);
+      }
       this.robot.object.enabled = frame.robotVisible;
       this.heading.object.enabled = frame.robotVisible;
       this.tether.object.enabled = frame.robotVisible;
       if (frame.robotVisible) {
         const x = frame.robot[0] * 100, z = -frame.robot[1] * 100, yaw = snapshot.robot[2];
         this.robot.object.getTransform().setLocalPosition(new vec3(x, 4, z));
-        this.heading.segments([[x, 0.2, z], [x + Math.cos(yaw) * 0.9, 0.2, z - Math.sin(yaw) * 0.9]], 0.2, 1, 10000, 0);
-        this.tether.segments([[x, 0.2, z], [x, 3.3, z]], 0.1, 1, 0.2, 0.2);
+        this.heading.object.getTransform().setLocalPosition(new vec3(x, 0.2, z));
+        this.heading.object.getTransform().setLocalRotation(quat.angleAxis(yaw, vec3.up()));
+        this.tether.object.getTransform().setLocalPosition(new vec3(x, 0, z));
       }
       this.target.object.enabled = frame.target !== null;
       if (frame.target) this.target.object.getTransform().setLocalPosition(new vec3(frame.target[0] * 100, 0.9, -frame.target[1] * 100));
-      this.drawHeights(frame.heights);
-      const bar = frame.scaleHalfWidthM * 100, barZ = -radiusCm * 0.72;
-      this.scale.segments([[-bar, 0.3, barZ], [bar, 0.3, barZ], [-bar, 0.3, barZ - 0.3], [-bar, 0.3, barZ + 0.3],
-        [bar, 0.3, barZ - 0.3], [bar, 0.3, barZ + 0.3]], 0.12, 1, 10000, 0);
-      this.scaleLabel.text = `${Number(frame.scaleM.toPrecision(3))} m`;
-      this.scaleLabel.getSceneObject().getTransform().setLocalPosition(new vec3(0, 0.4, barZ - 0.6));
+      if (viewportChanged || !previous) {
+        const bar = frame.scaleHalfWidthM * 100, barZ = -radiusCm * 0.72;
+        this.scale.segments([[-bar, 0.3, barZ], [bar, 0.3, barZ], [-bar, 0.3, barZ - 0.3], [-bar, 0.3, barZ + 0.3],
+          [bar, 0.3, barZ - 0.3], [bar, 0.3, barZ + 0.3]], 0.12, 1, 10000, 0);
+        this.scaleLabel.text = `${Number(frame.scaleM.toPrecision(3))} m`;
+        this.scaleLabel.getSceneObject().getTransform().setLocalPosition(new vec3(0, 0.4, barZ - 0.6));
+      }
       this.recenter.object.enabled = frame.recenter !== null;
       if (frame.recenter) {
         this.recenter.object.getTransform().setLocalPosition(new vec3(frame.recenter[0] * 100, 1, -frame.recenter[1] * 100));
@@ -232,7 +271,7 @@ export class SpecsNavigationMapView {
     this.lastSnapshot = null; this.lastCenter = null; this.lastGhost = null;
     this.projected = null;
     this.disc.hide(); this.route.hide(); this.robot.hide(); this.target.hide(); this.ghost.hide();
-    this.heading.hide(); this.tether.hide(); this.heights.hide(); this.pixels.clear();
+    this.heading.hide(); this.tether.hide(); this.pixels.clear();
     if (this.debugRoot) this.debugRoot.enabled = false;
   }
   loading(diameterM: number): void {
@@ -287,26 +326,5 @@ export class SpecsNavigationMapView {
     }
     this.disc.triangles(positions, indices, [1, 1, 1, 1], uvs);
   }
-  private drawHeights(heights: readonly { position: readonly [number, number, number]; hue: number }[]): void {
-    const vertices: number[] = [], indices: number[] = [];
-    const stride = Math.max(1, Math.ceil(heights.length / MAX_HEIGHT_SAMPLES));
-    for (let index = 0; index < heights.length; index += stride) {
-      const { position: [x, y, z], hue } = heights[index];
-      const rgb = hsl(hue, 0.72, 0.62), start = vertices.length / 12, size = 0.15;
-      for (const [dx, dz] of [[-size, -size], [size, -size], [-size, size], [size, size]]) {
-        vertices.push(x * 100 + dx, z * 100, -y * 100 + dz, 0, 1, 0, ...rgb, 1, 0, 0);
-      }
-      indices.push(start, start + 1, start + 2, start + 2, start + 1, start + 3);
-    }
-    this.heights.upload(vertices, indices);
-  }
   dispose(): void { if (!this.disposed) { this.disposed = true; this.pixels.clear(); this.root.destroy(); this.texture = null; } }
-}
-
-function hsl(hue: number, saturation: number, lightness: number): [number, number, number] {
-  const chroma = (1 - Math.abs(2 * lightness - 1)) * saturation, h = hue * 6;
-  const x = chroma * (1 - Math.abs(h % 2 - 1)), m = lightness - chroma / 2;
-  const rgb = h < 1 ? [chroma, x, 0] : h < 2 ? [x, chroma, 0] : h < 3 ? [0, chroma, x] :
-    h < 4 ? [0, x, chroma] : h < 5 ? [x, 0, chroma] : [chroma, 0, x];
-  return [rgb[0] + m, rgb[1] + m, rgb[2] + m];
 }

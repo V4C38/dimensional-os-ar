@@ -10,7 +10,7 @@ from dimos.ar.sensors.lidar_settings import LidarSettings
 DEFAULT_TARGET_POINTS = 2500
 
 # Near-robot annulus budgets (min_m, max_m, point budget). AR-specific: keep
-# dense floor geometry close to the robot; DimOS has no equivalent helper.
+# dense floor geometry close to the robot; dimOS has no equivalent helper.
 _ANNULUS_RINGS: tuple[tuple[float, float, int], ...] = (
     (0.0, 1.0, 500),
     (1.0, 2.5, 350),

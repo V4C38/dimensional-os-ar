@@ -30,7 +30,7 @@ _UNAVAILABLE_REASONS = {
     CapabilityName.NAVIGATION: "navigation not available on this robot",
     CapabilityName.ESTOP: "estop not available on this robot",
     CapabilityName.LOCALIZATION: "no localization provider configured",
-    CapabilityName.AGENT: "current blueprint has no DimOS agent",
+    CapabilityName.AGENT: "current blueprint has no dimOS agent",
 }
 
 _NAVIGATION_INPUT_REASONS = {

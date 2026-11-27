@@ -2,7 +2,7 @@
 
 ## Start here
 
-Use Python 3.12 and Node 22 (`nvm use`). Install Git LFS and ffmpeg/ffprobe. Follow the [README](README.md) for setup and choose the DimOS environment explicitly. Import installed DimOS; upstream changes belong in separate PRs.
+Use Python 3.12 and Node 22 (`nvm use`). Install Git LFS and ffmpeg/ffprobe. Follow the [README](README.md) for setup and choose the dimOS environment explicitly. Import installed dimOS; upstream changes belong in separate PRs.
 
 ## Ownership and structure
 
@@ -18,13 +18,13 @@ Group related helpers and classes in cohesive feature modules; a separate owner 
 
 Open Lens Studio from `clients/specs/spectacles-dimensional-os.esproj`. Manipulate scenes through Lens MCP, never hand edit them. Preserve asset metadata identities. The production Integration Test Harness must retain Auto Run false; native scenarios belong only in disposable editor projects.
 
-The [protocol](dimos-ar/PROTOCOL.md) is canonical: update it, Python protocol, and Core protocol together when changing messages. DimOS owns hardware, planning, execution, and measured feedback; AR owns sessions, authority, coordinate conversion, and presentation. Keep native stop/feedback safeguards until tested upstream equivalents exist.
+The [protocol](dimos-ar/PROTOCOL.md) is canonical: update it, Python protocol, and Core protocol together when changing messages. dimOS owns hardware, planning, execution, and measured feedback; AR owns sessions, authority, coordinate conversion, and presentation. Keep native stop/feedback safeguards until tested upstream equivalents exist.
 
 CI installs the exact source revision in `.dimos-revision`, rather than relying on package version metadata. Run the official mock manipulation contract before changing that baseline. Declare custom-model gripper joints explicitly; joint type alone does not identify a gripper.
 
-### Small DimOS upstream candidates
+### Small dimOS upstream candidates
 
-The existing planner adapter documents why it uses the installed module initialization with an AR subclass. The OpenYAM integration notes similarly keep the adapter local to this repository. Any upstream cleanup goes in a separate DimOS PR.
+The existing planner adapter documents why it uses the installed module initialization with an AR subclass. The OpenYAM integration notes similarly keep the adapter local to this repository. Any upstream cleanup goes in a separate dimOS PR.
 
 - **Go2 connection construction.** Extract the stock `GO2Connection` constructor's connection factory call into a protected method whose default delegates to the same installed factory. This gives the AR adapter an override without duplicating configuration, camera metadata, or lifecycle initialization. Add a test for the default factory and for a subclass-supplied resource. Keep existing native blueprints and startup behavior.
 - **Unitree LAN signaling.** Propose a small change in the WebRTC SDK to give its synchronous LAN HTTP requests explicit connect and read deadlines and expose the failure through the existing signaling API. Verify delayed and failed replies on the existing paths. This alone does not guarantee a hard wall-clock deadline on a trickling response. Keep the local subprocess until cancellation can be proven.
@@ -39,7 +39,7 @@ ClientCore owns protocol/session facts, localization capture and submission, rep
 
 Use shared spatial math, pose history and presentation projections instead of reimplementing them in each host. Keep units and coordinate conventions explicit at adapter boundaries. Optical world-basis transforms differ from object-pose basis changes. Preserve platform calibration and freshness policies as named inputs rather than hidden branches or copied algorithms.
 
-Backend controllers own application policy; ARModule wires DimOS services and stream adapters. Native safety/admission checks remain at every trust boundary even when their pure validation primitives are shared. A timeout does not prove native work has stopped. Keep blocking hardware effects outside synchronized state transitions and fence completion by operation/source identity.
+Backend controllers own application policy; ARModule wires dimOS services and stream adapters. Native safety/admission checks remain at every trust boundary even when their pure validation primitives are shared. A timeout does not prove native work has stopped. Keep blocking hardware effects outside synchronized state transitions and fence completion by operation/source identity.
 
 Launcher process sessions own their children, readiness and generated configuration. Async UI requests must check selection identity before publishing either success or failure. Shared blueprint/default metadata has one canonical source; frontend gating never replaces backend admission.
 
@@ -51,7 +51,7 @@ Edit Core only in `clients/core/src/`. Run `python3 clients/specs/tools/core_pac
 
 ## Validation
 
-Follow [AGENTS.md](AGENTS.md#commit--pull-request-guidelines) for validation frequency and follow-up exceptions. Run `./launcher/scripts/run-ci.sh` once at the final checkpoint for the completed change set. It includes Python lint/type/unit checks, launcher checks, Core and Specs tests, WebXR tests/build, tooling tests, the official mock manipulation contract, and complete browser integration. Use an unrestricted terminal because DimOS logs outside the repository. Report the checks actually completed and any remaining limits.
+Follow [AGENTS.md](AGENTS.md#commit--pull-request-guidelines) for validation frequency and follow-up exceptions. Run `./launcher/scripts/run-ci.sh` once at the final checkpoint for the completed change set. It includes Python lint/type/unit checks, launcher checks, Core and Specs tests, WebXR tests/build, tooling tests, the official mock manipulation contract, and complete browser integration. Use an unrestricted terminal because dimOS logs outside the repository. Report the checks actually completed and any remaining limits.
 
 For native changes, follow [native testing](clients/specs/tools/README.md). TypeScript compilation does not prove Preview rendering or scene wiring. Browser transport shims do not prove native Specs input. Keep evidence provenance intact and distinguish simulated results from physical tests. Restore production source, verify Auto Run false and no Review fixtures, and check compiler-cache correspondence before handing back for hardware validation.
 

@@ -72,7 +72,7 @@ class Alignment:
     ts: float
     confidence: float
 
-    def wire(self) -> dict[str, Any]:
+    def wire(self, batch_ts: float) -> dict[str, Any]:
         return {
             "type": "localization_result",
             "alignment_id": self.id,
@@ -80,7 +80,7 @@ class Alignment:
             "odom_reference_id": self.odom_reference_id,
             "tracking_reference_id": self.tracking_reference_id,
             **pose_payload(self.T_map_tracking),
-            "ts": self.ts,
+            "ts": batch_ts,
             "confidence": self.confidence,
         }
 
@@ -575,6 +575,8 @@ class LocalizationCoordinator:
         ts: float,
         robot_pose: PoseSample | None = None,
     ) -> None:
+        # observations() verifies the batch timestamp before starting the solver.
+        assert episode.capture_ts is not None
         pose = robot_pose or self._odometry.history.at_server_ts(
             ts, fallback_to_latest=self._allow_latest_robot_pose
         )
@@ -608,7 +610,7 @@ class LocalizationCoordinator:
             del self._issued[identity]
         client.pending_alignment = (alignment.id, self._clock() + 3)
         client.manual = False
-        self._emit(key, alignment.wire())
+        self._emit(key, alignment.wire(episode.capture_ts))
         client.episode = None
 
     async def _query(self, observation: Observation) -> LocalizedPose | None:

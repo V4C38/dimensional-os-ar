@@ -99,18 +99,18 @@ export class ReviewScenario extends BaseScriptComponent {
       const transform = view.dataRoot.getTransform(), point = transform.getWorldTransform().multiplyPoint(new vec3(-5, 0, 0));
       const from = point.add(new vec3(0, 20, 0)); input.ray(from, point, target); input.hover(target);
       input.triggerType = InteractorTriggerType.Pinch; input.targetingMode = TargetingMode.Indirect; input.start(target);
-      this.check("map-sik-press-registered", !!target);
+      this.check("map-sik-press-registered", !!target && (target.targetingMode & TargetingMode.Poke) !== 0);
     } else if (this.phase === 3) {
       this.check("map-gesture-captured", map.gesture.active);
       input.end();
     } else if (this.phase === 4) {
-      this.check("map-ray-tap-does-not-send-goal", !this.sent.some(row => row.map_target));
+      this.check("map-ray-tap-sends-goal", this.sent.some(row => row.map_target));
       input.triggerType = InteractorTriggerType.Poke; input.targetingMode = TargetingMode.Poke; input.start();
     } else if (this.phase === 5) {
       this.check("map-poke-captured", map.gesture.active);
       input.end();
     } else if (this.phase === 6) {
-      this.check("map-goal-authority", this.sent.some(row => row.type === "interaction_request" && row.action === "confirm" && !!row.map_target));
+      this.check("map-goal-authority", this.sent.filter(row => row.type === "interaction_request" && row.action === "confirm" && !!row.map_target).length === 2);
       this.check("map-goal-arrived", !!this.receivedGoal);
       ui.mainMenuView.showPage("sensors");
     } else if (this.phase === 7) {

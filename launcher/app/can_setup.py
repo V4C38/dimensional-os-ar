@@ -109,7 +109,7 @@ def setup_command(python: str, interface: str = INTERFACE) -> list[str]:
     if sys.platform != "linux":
         raise ValueError("SocketCAN configuration is only available on Linux")
     if not Path(python).is_file():
-        raise ValueError("Select an installed DimOS environment first")
+        raise ValueError("Select an installed dimOS environment first")
     command = [
         python,
         "-c",

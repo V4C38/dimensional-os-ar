@@ -966,6 +966,7 @@ body.resizing {
 .app [data-phase="starting"], .app [data-phase="stopping"],
 .app [data-phase="needs_setup"] { color: var(--warn); }
 .app [data-phase="error"] { color: var(--danger); }
+#dimosVersionHint { color: var(--text); }
 
 .app .profile-edit-row { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .app .profile-edit-row input { flex: 1; width: 0; min-width: 0; }
@@ -1368,4 +1369,30 @@ body.resizing {
 
 #replayTimelineStatus:empty {
   display: none;
+}
+
+.policy-intro { grid-column: 1 / -1; }
+.policy-field-label {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-small);
+}
+.app .policy-help > summary {
+  display: inline-flex;
+  padding: 2px;
+  cursor: pointer;
+}
+.app .policy-help > summary::marker { content: ""; }
+.app .policy-help > summary::after { display: none; }
+.policy-help > p {
+  position: absolute;
+  z-index: 2;
+  inset-inline: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--control-radius);
+  background: var(--card);
 }

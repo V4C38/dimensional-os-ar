@@ -1,4 +1,4 @@
-"""Hardware-free preflight, executed with the launcher's selected DimOS Python."""
+"""Hardware-free preflight, executed with the launcher's selected dimOS Python."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def check_planner() -> dict[str, Any]:
                 or requirement.marker.evaluate({"extra": "planning"})
             ) and result["roboplan_version"] not in requirement.specifier:
                 raise RuntimeError(
-                    f"DimOS {result['dimos_version']} requires {requirement}; installed RoboPlan is {result['roboplan_version']}. Install manipulation dependencies."
+                    f"dimOS {result['dimos_version']} requires {requirement}; installed RoboPlan is {result['roboplan_version']}. Install manipulation dependencies."
                 )
         from dimos.manipulation.manipulation_module import ManipulationModule
         from dimos.manipulation.planning.groups.models import PlanningGroupDefinition
@@ -51,7 +51,7 @@ def check_planner() -> dict[str, Any]:
             getattr(ManipulationModule, "inverse_kinematics", None)
         ):
             raise RuntimeError(
-                "DimOS is missing execute-by-plan-ID or nonmoving IK. Update the selected DimOS checkout."
+                "dimOS is missing execute-by-plan-ID or nonmoving IK. Update the selected dimOS checkout."
             )
         with TemporaryDirectory(prefix="dimos-planner-check-") as directory:
             path = Path(directory) / "probe.urdf"

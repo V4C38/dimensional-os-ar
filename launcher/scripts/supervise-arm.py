@@ -155,7 +155,7 @@ async def main(command: list[str]) -> int:
                 await asyncio.wait_for(asyncio.shield(exited), 60)
             except TimeoutError:
                 print(
-                    "DimOS shutdown timed out; terminating its process group.", flush=True
+                    "dimOS shutdown timed out; terminating its process group.", flush=True
                 )
                 os.killpg(child.pid, signal.SIGKILL)
                 await exited

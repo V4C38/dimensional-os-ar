@@ -45,7 +45,7 @@ def _sample_hello(_client_id: str) -> HelloBody:
             CapabilityName.LOCALIZATION: Capability(available=True, reason=None),
             CapabilityName.ESTOP: Capability(available=True, reason=None),
             CapabilityName.AGENT: Capability(
-                available=False, reason="current blueprint has no DimOS agent"
+                available=False, reason="current blueprint has no dimOS agent"
             ),
         },
         odom_reference_id="test-odom",

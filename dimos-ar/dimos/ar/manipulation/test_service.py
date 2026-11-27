@@ -476,7 +476,7 @@ async def test_emergency_stop_uses_the_service_task_owner():
     "message,code",
     [
         ("Pink IK did not converge within the iteration budget", "ik_failed"),
-        ("Pink IK candidate violates DimOS joint limits", "joint_limit"),
+        ("Pink IK candidate violates dimOS joint limits", "joint_limit"),
         (
             "Pink IK solver failed: QP solver did not find a solution to the differential IK problem",
             "ik_failed",

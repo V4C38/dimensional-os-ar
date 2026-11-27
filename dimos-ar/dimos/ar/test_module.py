@@ -200,7 +200,7 @@ def test_hello_includes_estop_capability() -> None:
     assert hello.capabilities[CapabilityName.LOCALIZATION].reason is None
     assert hello.capabilities[CapabilityName.AGENT].available is False
     assert hello.capabilities[CapabilityName.AGENT].reason == (
-        "current blueprint has no DimOS agent"
+        "current blueprint has no dimOS agent"
     )
     assert hello.robot.display_name == UNITREE_GO2_PROFILE.display_name
     assert hello.navigation_inputs[NAV_GOAL].available is True

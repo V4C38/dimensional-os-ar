@@ -1,19 +1,19 @@
 # AR manipulation
 
 The `openyam-ar-planner` blueprint composes one official OpenYAM hardware owner,
-a pose-capable coordinator, installed DimOS manipulation with narrow AR RPC adapters,
+a pose-capable coordinator, installed dimOS manipulation with narrow AR RPC adapters,
 and ARModule. Both clients consume portable manipulation intent and presentation.
 Navigation and manipulation capabilities are independent. Grasping, pick/place,
 agentic manipulation and mobile manipulation are outside this interface.
 
 ## Runtime and setup
 
-Use a selected DimOS environment with execute-by-plan-ID and nonmoving IK APIs.
+Use a selected dimOS environment with execute-by-plan-ID and nonmoving IK APIs.
 Install its planning extra together with `dimos-ar[manipulation,dev]`; the launcher
 checks planner construction without contacting hardware. A successful import alone
 does not establish readiness. CI pins installed source through `.dimos-revision`;
 run the official mock contract before changing the supported baseline.
-Import installed DimOS; do not patch upstream source.
+Import installed dimOS; do not patch upstream source.
 
 Select an OpenYAM profile and WebXR or Specs in the launcher. Use Simulated for
 software development. Named profiles live in `~/.config/dimos/ar-profiles.json`;
@@ -39,7 +39,7 @@ These select official in-memory hardware. Physical OpenYAM requires Linux CAN
 readiness: `can0` UP at 1 Mbit/s, transmit queue 1000 and not bus-off. ERROR-ACTIVE
 is normal. Launcher checks are read-only; Set up CAN explicitly invokes the selected
 environment's `dimos hardware can setup can0` with `pkexec`, refuses setup while
-DimOS runs, and does not ask for a browser password. Simulation bypasses CAN setup
+dimOS runs, and does not ask for a browser password. Simulation bypasses CAN setup
 but still requires the planner. Start checks readiness before touching processes.
 
 ### Calibration and frames
@@ -142,7 +142,7 @@ must be validated in an attended session.
 
 | Owner | Responsibility |
 |---|---|
-| `ARManipulationModule` | DimOS lifecycle/update thread and joined teardown |
+| `ARManipulationModule` | dimOS lifecycle/update thread and joined teardown |
 | `DimOSManipulationAdapter` | Installed native API boundary, planning workers and observations |
 | `ManipulationRuntime` | Typed backend admission and owned lifecycle transitions |
 | `ManipulationSession` / `FollowingTail` | Held native tokens / detached release completion |
@@ -161,7 +161,7 @@ owner, including replacements still starting. Stop/heartbeat remain independent.
 
 ## Visual assets and platform presentation
 
-The bundled planning ghost derives from the per-link OpenYAM visuals selected by DimOS.
+The bundled planning ghost derives from the per-link OpenYAM visuals selected by dimOS.
 The [model notice](../../../../clients/webxr/public/models/NOTICE.md) identifies the source revision.
 Configured topology/bounds and a normalized visual signature prevent incompatible
 models from using it. Core supports revolute, continuous, prismatic, fixed and mimic
@@ -170,7 +170,7 @@ asset URLs. Gripper articulation affects its subtree, never controlled arm joint
 
 To rebuild the WebXR GLB, Specs geometry and shared fixture from the installed planning
 model, run `python clients/specs/tools/export_manipulation_mesh.py --from-dimos` from
-the repository root using the DimOS planning environment. Native arm GPU opacity
+the repository root using the dimOS planning environment. Native arm GPU opacity
 and buffers are documented in the [native guide](../../../../clients/specs/tools/README.md#specs-arm-rendering).
 WebXR optionally applies environment depth to bounds/paths; controls, handles and
 mesh ghosts remain excluded. Specs depth occlusion is deferred.
@@ -226,7 +226,7 @@ arrival. Keep those distinct. The protocol owns operation-specific completion cr
 Follow [AGENTS validation policy](../../../../AGENTS.md#commit--pull-request-guidelines).
 Python/Core tests cover authority, exact IDs, stale replies, cancellation, completion,
 gripper, reset/parking and continuity. Host tests cover input/rendering/resource ownership.
-Browser/native fixtures remain distinct from installed DimOS mock planning evidence.
+Browser/native fixtures remain distinct from installed dimOS mock planning evidence.
 
 Run the official contract in the selected Python 3.12 planning environment:
 

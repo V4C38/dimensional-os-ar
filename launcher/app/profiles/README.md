@@ -20,4 +20,4 @@ The launcher does not import the native global `armodule` section, rename existi
 profiles, or copy credentials from a repository-root `.env`. Credentials belong in
 `launcher/.env`; source choices belong in `ar-launcher.json`. Existing files are
 left in place. Each run uses an immutable native config snapshot that replaces its
-AR section with the selected profile and preserves other DimOS configuration.
+AR section with the selected profile and preserves other dimOS configuration.

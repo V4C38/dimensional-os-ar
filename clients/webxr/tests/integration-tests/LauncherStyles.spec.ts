@@ -125,6 +125,7 @@ test("launcher prioritizes session controls and shows live connection details", 
         ],
         log_levels: ["DEBUG", "INFO", "WARNING", "ERROR"], log_level: "INFO",
         localization: { travel_threshold_m: 1, heading_threshold_deg: 30 },
+        dimos_min_version: "0.0.16",
         mounts: [{
           marker_id: 0, print_size_mm: 70, forward_m: 0.18, lateral_m: 0,
           up_m: 0.06, yaw_deg: -90, pitch_deg: -15, roll_deg: 0,
@@ -142,10 +143,17 @@ test("launcher prioritizes session controls and shows live connection details", 
     if (path === "/api/setup/location") {
       const { mode, clone_dir } = route.request().postDataJSON();
       await route.fulfill({ json: mode === "clone"
-        ? clone_dir
-          ? { state: "download", message: "DimOS is missing here." }
-          : { state: "invalid", message: "Enter a folder path." }
-        : { state: "found", message: "DimOS installation found." } });
+        ? clone_dir === "/tmp/current-dimos"
+          ? { state: "found", message: "DimOS installation found.", dimos_version: "0.0.16", dimos_ref: "main test" }
+          : clone_dir === "/tmp/old-dimos"
+            ? { state: "incompatible", message: "dimOS version is incompatible.", dimos_version: "0.0.15" }
+            : clone_dir ? { state: "download", message: "dimOS is missing here." }
+              : { state: "invalid", message: "Enter a folder path." }
+        : { state: "found", message: "DimOS installation found.", dimos_version: "0.0.16", dimos_ref: "main test" } });
+      return;
+    }
+    if (path === "/api/browse-native-map") {
+      await route.fulfill({ json: { path: "/tmp/room.map.db" } });
       return;
     }
     if (path === "/api/browse-dimos-install") {
@@ -166,6 +174,9 @@ test("launcher prioritizes session controls and shows live connection details", 
       running_since_ms: runningSince,
       connections: [],
       dimos_install_dir: "/tmp/current-dimos",
+      check_ok: true,
+      dimos_version: "0.0.16",
+      dimos_ref: "main test",
     } : {} });
   });
   await page.goto("http://launcher.test/");
@@ -255,7 +266,8 @@ test("launcher prioritizes session controls and shows live connection details", 
   await expect(card.getByText("Waiting for connections")).toBeVisible();
   await expect(card.getByRole("listitem")).toHaveCount(0);
   await page.evaluate(() => window.dispatchEvent(new CustomEvent("launcher-test-snapshot", {
-    detail: { type: "status", phase: "idle", check_ok: true, dimos_install_dir: "/tmp/current-dimos", connections: [] },
+    detail: { type: "status", phase: "idle", check_ok: true, dimos_install_dir: "/tmp/current-dimos",
+      dimos_version: "0.0.16", dimos_ref: "main test", connections: [] },
   })));
   const install = page.locator("#installBanner");
   const setupSummary = install.locator("summary");
@@ -271,28 +283,59 @@ test("launcher prioritizes session controls and shows live connection details", 
   expect(setupBounds.x).toBe(blueprintBounds.x);
   const disclosureArrow = await setupSummary.evaluate(summary => getComputedStyle(summary, "::after").backgroundImage);
   await expect(page.getByLabel("Blueprint", { exact: true })).toHaveCSS("background-image", disclosureArrow);
+  await expect(install.locator("#dimosVersionHint")).toBeHidden();
+  await expect(setupSummary).not.toContainText("dimOS found");
   await install.locator("summary").click();
   await expect(install.getByRole("group", { name: "Installation source" })).toBeVisible();
   const path = install.getByLabel("Installation folder");
   await expect(path).toHaveValue("/tmp/current-dimos");
+  await expect(install.locator("#dimosVersionHint")).toBeVisible();
+  await expect(install.locator("#dimosVersionHint")).toHaveText("dimOS found · dimOS 0.0.16 · main test");
+  await expect(install.locator("#dimosVersionHint")).toHaveCount(1);
+  await expect(install.locator("#dimosInstallState")).toHaveCSS("color", "rgb(63, 185, 80)");
+  await expect(install.locator("#dimosInstallVersion")).toHaveCSS("color", "rgb(245, 245, 247)");
+  await expect(install.getByText("Minimum dimOS version: 0.0.16")).toBeVisible();
   await path.fill("/tmp/edited-dimos");
   expect(pickerStart).toBeUndefined();
   await install.getByRole("button", { name: "Browse…" }).click();
   await expect(path).toHaveValue("/tmp/chosen-dimos");
+  await expect(install.locator("#installHint")).toBeHidden();
+  await expect(install.getByText("DimOS installation found.", { exact: true })).toHaveCount(0);
   expect(pickerStart).toBe("/tmp/edited-dimos");
   await install.getByText("Download from GitHub").click();
   const destination = install.getByLabel("Download folder");
   await expect(install.getByText("Enter a folder path.")).toBeVisible();
   await expect(install.getByRole("button", { name: "Download & install" })).toBeDisabled();
+  const installStatus = install.locator("#dimosVersionHint");
+  const minimumVersion = install.getByText("Minimum dimOS version: 0.0.16");
+  await expect(minimumVersion).toBeVisible();
+  expect((await minimumVersion.boundingBox())!.y).toBeLessThan(
+    (await install.locator("#installSourceLabel").boundingBox())!.y,
+  );
+  const installState = install.locator("#dimosInstallState");
+  const installVersion = install.locator("#dimosInstallVersion");
+  await destination.fill("/tmp/current-dimos");
+  await expect(installStatus).toHaveText("dimOS found · dimOS 0.0.16 · main test");
+  await expect(install.locator("#installHint")).toBeHidden();
+  await expect(install.getByText("DimOS installation found.", { exact: true })).toHaveCount(0);
+  await expect(installState).toHaveCSS("color", "rgb(63, 185, 80)");
+  await expect(installVersion).toHaveCSS("color", "rgb(245, 245, 247)");
+  await destination.fill("/tmp/old-dimos");
+  await expect(installStatus).toHaveText("dimOS incompatible · dimOS 0.0.15");
+  await expect(install.locator("#installHint")).toBeHidden();
+  await expect(installState).toHaveCSS("color", "rgb(210, 153, 34)");
+  await expect(installVersion).toHaveCSS("color", "rgb(245, 245, 247)");
   await destination.fill("/tmp/empty-dimos");
-  await expect(install.getByText("DimOS is missing here.")).toBeVisible();
+  await expect(install.getByText("dimOS is missing here.")).toBeVisible();
+  await expect(installStatus).toHaveText("dimOS missing");
+  await expect(installState).toHaveCSS("color", "rgb(248, 81, 73)");
   await expect(install.getByRole("button", { name: "Download & install" })).toBeEnabled();
   await install.getByText("Existing install").click();
 
   const robot = page.getByRole("group", { name: "Robot", exact: true });
   const robotSource = robot.getByLabel("Robot source", { exact: true });
   await expect(robot.getByRole("combobox", { name: "Robot config", exact: true })).toBeVisible();
-  await expect(robotSource.locator("option")).toHaveText(["Auto (scan on start)", "Manual IP", "Simulated hardware"]);
+  await expect(robotSource.locator("option")).toHaveText(["Auto (scan on start)", "Manual IP", "Simulated Hardware"]);
   const setupFonts = await page.locator(".robot-setup-field .label").evaluateAll(labels =>
     labels.map(label => {
       const style = getComputedStyle(label);
@@ -344,6 +387,8 @@ test("launcher prioritizes session controls and shows live connection details", 
       return ["canCard", "webrtcCard"].map(card => !document.getElementById(card)!.classList.contains("hidden"));
     }, id);
   expect(await switchBlueprint("openyam-ar-planner")).toEqual([true, false]);
+  await expect(page.locator('#robotSource option[value="simulated"]')).toHaveText("Simulated Hardware");
+  await expect(page.locator('#playbackSource option[value=""]')).toHaveText("Recording: OpenYAM AR example");
   await expect(robotSource.locator('option[value="auto"]')).toHaveText("Auto (first available CAN interface)");
   const expectSourceIndent = async (childId: string) => {
     const spacing = await robotSource.evaluate((source, id) => {
@@ -382,7 +427,7 @@ test("launcher prioritizes session controls and shows live connection details", 
   await expect(refresh).toBeHidden();
   await expect(robot.locator("#webrtcSummary")).toBeHidden();
   const recording = robot.getByLabel("Recording", { exact: true });
-  await expect(recording.locator("option")).toHaveText(["Go2 example"]);
+  await expect(recording.locator("option")).toHaveText(["Recording: Unitree Go2 AR example"]);
   await expect(recording).toHaveCSS("height", "34px");
   const addRecording = robot.getByRole("button", { name: "Add recording" });
   await expect(addRecording).toHaveCSS("height", "34px");
@@ -391,7 +436,7 @@ test("launcher prioritizes session controls and shows live connection details", 
   await robot.getByRole("button", { name: "Add recording" }).click();
   await expect(recording).toHaveValue("/tmp/recording-1.db");
   await robot.getByRole("button", { name: "Add recording" }).click();
-  await expect(recording.locator("option")).toHaveText(["Go2 example", "recording-1.db", "recording-2.db"]);
+  await expect(recording.locator("option")).toHaveText(["Recording: Unitree Go2 AR example", "recording-1.db", "recording-2.db"]);
   await recording.selectOption("/tmp/recording-1.db");
   await expect(recording).toHaveValue("/tmp/recording-1.db");
   const profile = page.getByRole("region", { name: "Robot config" });
@@ -443,10 +488,18 @@ test("launcher prioritizes session controls and shows live connection details", 
   )).toBe(true);
   await vps.click();
   await marker.click();
-  const map = relocalization.getByLabel("Prescanned LiDAR map");
+  const map = localization.getByLabel("dimOS saved map path");
   await expect(map).toBeHidden();
-  await relocalization.getByText("Relocalization policy").click();
+  await localization.getByRole("switch", { name: "dimOS saved map" }).check();
   await expect(map).toBeVisible();
+  const mapBrowse = localization.locator("#nativeMapField").getByRole("button", { name: "Browse…" });
+  await mapBrowse.click();
+  await expect(map).toHaveValue("/tmp/room.map.db");
+  expect(await relocalization.evaluate(section => section === section.parentElement!.firstElementChild)).toBe(true);
+  await relocalization.getByText("Relocalization policy").click();
+  await relocalization.getByLabel("About minimum distance").press("Enter");
+  await expect(relocalization.getByText(/How far the robot can travel/)).toBeVisible();
+  await relocalization.getByLabel("About minimum distance").press("Enter");
   await expect(relocalization.getByLabel("Minimum distance (m)")).toHaveValue("1");
   await expect(relocalization.getByLabel("Minimum rotation (°)")).toHaveValue("30");
   await expect(localization.getByLabel("MultiSet client secret", { exact: true })).toHaveAttribute("type", "password");
@@ -511,7 +564,7 @@ test("launcher prioritizes session controls and shows live connection details", 
   await expect(page.getByLabel("Startup log level")).toBeDisabled();
   await localizationSummary.click();
   await expect(localization).toHaveCSS("display", "block");
-  await expect(localization.getByLabel("Prescanned LiDAR map")).toBeDisabled();
+  await expect(localization.getByLabel("dimOS saved map path")).toBeDisabled();
   const markerCard = localization.locator(".tag-card").first();
   await markerCard.locator("summary").click();
   await expect(markerCard).toHaveCSS("display", "block");
@@ -525,10 +578,10 @@ test("launcher prioritizes session controls and shows live connection details", 
   }, { phase, error });
   await updatePhase("starting");
   await expect(leftPane.getByRole("button", { name: "Cancel startup" })).toBeVisible();
-  await expect(leftPane.locator("#actionNote")).toHaveText("Starting DimOS");
+  await expect(leftPane.locator("#actionNote")).toHaveText("Starting dimOS");
   await expect(leftPane.locator("#actionElapsed")).toHaveText("0:01");
   await updatePhase("stopping");
-  await expect(leftPane.locator("#actionNote")).toHaveText("Stopping DimOS");
+  await expect(leftPane.locator("#actionNote")).toHaveText("Stopping dimOS");
   await expect(leftPane.locator("#actionElapsed")).toHaveText("0:00");
   await expect(leftPane.getByRole("button", { name: "Force stop" })).toBeVisible();
   await updatePhase("error", "Robot could not connect");

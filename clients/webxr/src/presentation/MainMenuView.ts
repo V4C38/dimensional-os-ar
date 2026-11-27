@@ -138,7 +138,7 @@ export class MainMenuView {
     this.onDraft = handlers.onDraft;
     this.soundEnabled = handlers.soundEnabled ?? (() => true);
     this.panel = new xb.SpatialPanel({ width: WIDTH, height: HEIGHT, backgroundColor: "#00000000", draggable: false, useDefaultPosition: false, useBorderlessShader: true });
-    this.panel.name = "DimOS control panel";
+    this.panel.name = "dimOS control panel";
     // The glass plate replaces the package's opaque panel background.
     this.panel.mesh.visible = false;
     this.panel.add(this.wizard, this.success, this.console, this.details, this.header, this.robotBadge, this.settingsPage, this.sensorsPage, this.recoveryPage, this.runtimeFooter);

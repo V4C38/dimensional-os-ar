@@ -1,4 +1,4 @@
-"""Bounded, non-actuating discovery through the selected DimOS environment."""
+"""Bounded, non-actuating discovery through the selected dimOS environment."""
 from __future__ import annotations
 
 import json
