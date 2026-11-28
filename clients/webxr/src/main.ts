@@ -142,15 +142,9 @@ async function boot(): Promise<void> {
       }),
       synthesis: browserSynthesis(),
     });
-    const microphoneSetup = document.getElementById("microphone-setup");
-    const microphoneButton = document.getElementById("enable-microphone") as HTMLButtonElement | null;
     const microphoneStatus = document.getElementById("microphone-status");
-    let microphoneOffered = false;
     const renderMicrophone = () => {
-      if (!microphoneSetup || !microphoneButton || !microphoneStatus) return;
-      microphoneSetup.hidden = !microphoneOffered;
-      microphoneButton.disabled = microphone.state !== "needed";
-      microphoneButton.textContent = microphone.state === "granted" ? "Microphone enabled" : "Enable microphone";
+      if (!microphoneStatus) return;
       microphoneStatus.textContent = microphone.error ?? (microphone.state === "requesting"
         ? "Allow microphone access in the browser prompt…"
         : microphone.state === "unsupported" ? "Microphone access requires a supported headset browser over HTTPS." : "");
@@ -189,18 +183,7 @@ async function boot(): Promise<void> {
         xr.offerSession = offerSession;
       }
     }
-    const syncMicrophone = () => {
-      const view = client.session.view();
-      const offered = view.connection === "ready" && view.capabilities?.agent.available === true;
-      if (offered !== microphoneOffered) {
-        microphoneOffered = offered;
-        if (offered) microphone.check();
-        renderMicrophone();
-      }
-    };
-    const unsubscribeMicrophone = client.session.subscribeView(syncMicrophone);
-    if (microphoneButton) microphoneButton.onclick = () => { if (microphoneOffered) microphone.request(); };
-    syncMicrophone();
+    microphone.check();
     client.session.start();
     const landingTick = window.setInterval(() => {
       if (document.visibilityState !== "visible" || xb.core.renderer.xr.isPresenting) return;
@@ -217,7 +200,8 @@ async function boot(): Promise<void> {
       select.disabled = false;
       enter.disabled = false;
       cameraReady = false;
-      enter.textContent = "Allow camera";
+      enter.textContent = "Grant Permissions";
+      microphone.check();
       setStatus("", "muted");
     };
     xb.core.renderer.xr.addEventListener("sessionstart", onStarted);
@@ -226,16 +210,15 @@ async function boot(): Promise<void> {
       if (event.persisted) { app.onXRSessionEnded(); onEnded(); return; }
       xb.core.renderer.xr.removeEventListener("sessionstart", onStarted);
       xb.core.renderer.xr.removeEventListener("sessionend", onEnded);
-      window.clearInterval(landingTick); info?.dispose(); unsubscribeMicrophone();
-      if (microphoneButton) microphoneButton.onclick = null;
+      window.clearInterval(landingTick); info?.dispose();
       enter.onclick = null;
       app.dispose();
     });
     setStatus("", "muted");
-    enter.textContent = "Allow camera";
+    enter.textContent = "Grant Permissions";
     select.onchange = () => {
       cameraReady = false;
-      enter.textContent = "Allow camera";
+      enter.textContent = "Grant Permissions";
       setStatus("", "muted");
     };
     select.disabled = false;
@@ -246,7 +229,12 @@ async function boot(): Promise<void> {
       if (!cameraReady) {
         select.disabled = true;
         setStatus("Allow camera access in the browser prompt…", "muted");
-        void camera.requestPermission().then(() => {
+        // Both prompts start in the same explicit gesture. The camera is required
+        // for alignment, while declining the microphone still allows AR entry.
+        const cameraPermission = camera.requestPermission();
+        microphone.request();
+        renderMicrophone();
+        void cameraPermission.then(() => {
           cameraReady = true;
           enter.textContent = "Enter AR";
           setStatus("", "muted");
@@ -260,7 +248,7 @@ async function boot(): Promise<void> {
         });
         return;
       }
-      // A separate click preserves WebXR activation after camera permission UI.
+      // A separate click preserves WebXR activation after the permission UI.
       try {
         startImmersiveSession(error => {
           setStatusFromUnknown(error);
