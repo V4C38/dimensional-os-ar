@@ -313,11 +313,9 @@ export async function bootstrap(
     app.client.speech.deps.synthesis = null;
     app.client.speech.snapshotValue.recognitionAvailable = true;
   });
-  await page.locator("#enter").click();
+  await page.getByRole("button", { name: "Grant Permissions" }).click();
   await expect(page.locator("#enter")).toHaveText("Enter AR");
-  await page.getByRole("button", { name: "Enable microphone" }).click();
-  await expect(page.getByRole("button", { name: "Microphone enabled" })).toBeDisabled();
-  expect(await page.evaluate(() => (window as any).integrationMicChecks)).toBe(1);
+  await expect.poll(() => page.evaluate(() => (window as any).integrationMicChecks)).toBe(1);
   await page.locator("#enter").click();
   await expect
     .poll(() => snapshot(page).then((s) => s?.wizardStep))
